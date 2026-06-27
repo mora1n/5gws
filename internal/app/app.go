@@ -146,21 +146,24 @@ func cmdInstall(args []string, stdin io.Reader, out io.Writer) error {
 	cfgPath, rulesPath, _ := commonPaths(fs)
 	assumeYes := fs.Bool("assume-yes", false, "skip confirmation")
 	dryRun := fs.Bool("dry-run", false, "show actions without writing system state")
+	reconfigure := fs.Bool("reconfigure", false, "rerun guided config and overwrite generated inputs")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	cfg, norm, generated, err := loadOrWizard(*cfgPath, *rulesPath, stdin, out, *assumeYes)
+	reader := bufio.NewReader(stdin)
+	cfg, norm, generated, err := loadOrWizard(*cfgPath, *rulesPath, reader, out, *assumeYes, *reconfigure)
 	if err != nil {
 		return err
 	}
 	printInstallSummary(out, cfg, norm)
-	if !*assumeYes && !confirm(stdin, out, "Continue install?") {
+	if !*assumeYes && !confirm(reader, out, "Continue install?") {
 		return errors.New("install cancelled")
 	}
 	if *dryRun {
 		if err := installer.EnsureRuntime(cfg, true, out); err != nil {
 			return err
 		}
+		printIOSInstallHint(out, cfg, *cfgPath, true)
 		fmt.Fprintln(out, "dry-run: no files or services changed")
 		return nil
 	}
@@ -185,7 +188,10 @@ func cmdInstall(args []string, stdin io.Reader, out io.Writer) error {
 	if err := render.WriteAll(filepath.Join(cfg.System.StateDir, "rendered"), files); err != nil {
 		return err
 	}
-	return runApplyCommands(cfg, out, false)
+	if err := runApplyCommands(cfg, out, false); err != nil {
+		return err
+	}
+	return printIOSInstallHint(out, cfg, *cfgPath, false)
 }
 
 func cmdInstallSmartDNS(args []string, out io.Writer) error {
@@ -395,9 +401,16 @@ type generatedInputs struct {
 	rules  string
 }
 
-func loadOrWizard(cfgPath, rulesPath string, stdin io.Reader, out io.Writer, assumeYes bool) (config.Config, rules.Normalized, generatedInputs, error) {
+func loadOrWizard(cfgPath, rulesPath string, reader *bufio.Reader, out io.Writer, assumeYes, reconfigure bool) (config.Config, rules.Normalized, generatedInputs, error) {
+	if reconfigure {
+		fmt.Fprintln(out, "reconfigure requested; starting guided bootstrap")
+		cfgText, rulesText := wizard(reader, out, assumeYes)
+		cfg, norm, err := parseGenerated(cfgText, rulesText)
+		return cfg, norm, generatedInputs{config: cfgText, rules: rulesText}, err
+	}
 	cfg, norm, err := loadAll(cfgPath, rulesPath)
 	if err == nil {
+		fmt.Fprintf(out, "using existing %s and %s; run 5gws install --reconfigure to rerun guided setup\n", cfgPath, rulesPath)
 		return cfg, norm, generatedInputs{}, nil
 	}
 	if !os.IsNotExist(err) {
@@ -406,7 +419,7 @@ func loadOrWizard(cfgPath, rulesPath string, stdin io.Reader, out io.Writer, ass
 	fmt.Fprintln(out, "config or rules file missing; starting guided bootstrap")
 	cfgText, rulesText := "", ""
 	if !fileExists(cfgPath) {
-		cfgText, _ = wizard(stdin, out, assumeYes)
+		cfgText, _ = wizard(reader, out, assumeYes)
 	}
 	if !fileExists(rulesPath) {
 		rulesText = defaultRulesText()
@@ -415,8 +428,8 @@ func loadOrWizard(cfgPath, rulesPath string, stdin io.Reader, out io.Writer, ass
 	return cfg, norm, generatedInputs{config: cfgText, rules: rulesText}, err
 }
 
-func wizard(stdin io.Reader, out io.Writer, assumeYes bool) (string, string) {
-	return wizardWithDefaults(stdin, out, assumeYes, detectWizardDefaults())
+func wizard(reader *bufio.Reader, out io.Writer, assumeYes bool) (string, string) {
+	return wizardWithDefaults(reader, out, assumeYes, detectWizardDefaults())
 }
 
 type wizardDefaults struct {
@@ -425,8 +438,7 @@ type wizardDefaults struct {
 	IngressIface string
 }
 
-func wizardWithDefaults(stdin io.Reader, out io.Writer, assumeYes bool, defaults wizardDefaults) (string, string) {
-	reader := bufio.NewReader(stdin)
+func wizardWithDefaults(reader *bufio.Reader, out io.Writer, assumeYes bool, defaults wizardDefaults) (string, string) {
 	gateway := prompt(reader, out, "gateway IP", defaults.GatewayIP, assumeYes)
 	cidr := prompt(reader, out, "carrier internal CIDR", defaults.InternalCIDR, assumeYes)
 	iface := prompt(reader, out, "ingress interface", defaults.IngressIface, assumeYes)
@@ -656,9 +668,22 @@ func printInstallSummary(w io.Writer, cfg config.Config, norm rules.Normalized) 
 	fmt.Fprintf(w, "rules: %d\n", len(norm.Rules))
 }
 
-func confirm(stdin io.Reader, out io.Writer, prompt string) bool {
+func printIOSInstallHint(out io.Writer, cfg config.Config, cfgPath string, dryRun bool) error {
+	if !cfg.IOS.Enabled {
+		fmt.Fprintf(out, "iOS profile flow disabled; enable [ios] and run: 5gws ios-link --config %s\n", cfgPath)
+		return nil
+	}
+	if dryRun {
+		fmt.Fprintf(out, "dry-run: would print iOS QR codes with: 5gws ios-link --config %s\n", cfgPath)
+		return nil
+	}
+	fmt.Fprintln(out, "\niOS certificate/profile links:")
+	return cmdIOSLink([]string{"--config", cfgPath}, out)
+}
+
+func confirm(reader *bufio.Reader, out io.Writer, prompt string) bool {
 	fmt.Fprintf(out, "%s [y/N] ", prompt)
-	line, _ := bufio.NewReader(stdin).ReadString('\n')
+	line, _ := reader.ReadString('\n')
 	return strings.EqualFold(strings.TrimSpace(line), "y")
 }
 

@@ -6,13 +6,18 @@ install_dir="${INSTALL_DIR:-/usr/local/bin}"
 version=""
 dry_run=0
 run_install=1
+install_args=()
 
 usage() {
     cat <<'EOF'
-Usage: install.sh [--version VERSION] [--dry-run] [--skip-5gws-install]
+Usage: install.sh [--version VERSION] [--dry-run] [--skip-5gws-install] [5gws install flags]
 
 Downloads the 5gws linux-amd64 release asset, installs the binary to
 /usr/local/bin/5gws, then runs "5gws install".
+
+Examples:
+  wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash
+  wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash -s -- --reconfigure
 EOF
 }
 
@@ -39,6 +44,15 @@ while [[ $# -gt 0 ]]; do
         --skip-5gws-install)
             run_install=0
             shift
+            ;;
+        --assume-yes|--reconfigure)
+            install_args+=("$1")
+            shift
+            ;;
+        --config|--rules)
+            [[ $# -ge 2 ]] || die "$1 requires a value"
+            install_args+=("$1" "$2")
+            shift 2
             ;;
         -h|--help)
             usage
@@ -155,7 +169,7 @@ info "install dir: ${install_dir}"
 if [[ "$dry_run" -eq 1 ]]; then
     info "dry-run: would download and install 5gws"
     if [[ "$run_install" -eq 1 ]]; then
-        info "dry-run: would run ${install_dir}/5gws install"
+        info "dry-run: would run ${install_dir}/5gws install ${install_args[*]}"
     fi
     exit 0
 fi
@@ -176,7 +190,8 @@ if [[ "$run_install" -eq 0 ]]; then
 fi
 
 if [[ -r /dev/tty ]]; then
-    "${install_dir}/5gws" install < /dev/tty
+    info "running ${install_dir}/5gws install ${install_args[*]}"
+    "${install_dir}/5gws" install "${install_args[@]}" < /dev/tty
 else
-    die "no controlling TTY for guided install; run ${install_dir}/5gws install manually"
+    die "no controlling TTY for guided install; run ${install_dir}/5gws install manually, or use ssh -t for one-line install"
 fi

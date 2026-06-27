@@ -30,16 +30,22 @@ nftables 只 redirect 同时匹配 `network.ingress_iface` 和 `network.internal
 - Cloudflare 使用“仅 DNS / 灰云”，不要开启橙云代理。
 - 等 `dig +short dot.example.com` 返回 VPS IP 后继续。
 
-一键安装并进入引导(需要root权限)：
+一键安装(需要root权限)：
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash
+wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash
 ```
 
 固定版本：
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash -s -- --version 0.1.1
+wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash -s -- --version 0.1.1
+```
+
+重新进入引导并覆盖生成的配置：
+
+```sh
+wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash -s -- --reconfigure
 ```
 
 手动安装：
@@ -58,6 +64,18 @@ sudo 5gws apply
 - `carrier internal CIDR`：默认 `172.22.0.0/16`。
 - `ingress interface`：默认来自 `ip route show default`。
 - `enable Apple/iOS profile flow`：默认启用，自动生成 iOS 证书和描述文件下载服务。
+
+如果配置文件已存在，`5gws install` 会复用现有配置，不会默认覆盖。需要重新引导时显式执行：
+
+```sh
+sudo 5gws install --reconfigure
+```
+
+启用 Apple/iOS 流程后，安装完成会直接在终端显示 CA 证书和描述文件二维码；后续也可手动执行：
+
+```sh
+sudo 5gws ios-link --config /etc/5gws/config.toml
+```
 
 显式安装运行时：
 
