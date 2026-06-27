@@ -47,6 +47,48 @@ func TestConfigRendersAddressRules(t *testing.T) {
 	}
 }
 
+func TestConfigGatewayRulesOverrideDNSPoolRules(t *testing.T) {
+	cases := []struct {
+		name  string
+		rules []rules.Rule
+	}{
+		{
+			name: "gateway first",
+			rules: []rules.Rule{
+				{Name: "manual-direct", Exit: "direct", DomainSuffix: []string{"ippure.com"}},
+				{Name: "imported-cn", DNSPool: "cn", DomainSuffix: []string{"ippure.com"}},
+				{Name: "imported-example", DNSPool: "cn", DomainSuffix: []string{"example.cn"}},
+			},
+		},
+		{
+			name: "dns pool first",
+			rules: []rules.Rule{
+				{Name: "imported-cn", DNSPool: "cn", DomainSuffix: []string{"ippure.com"}},
+				{Name: "manual-direct", Exit: "direct", DomainSuffix: []string{"ippure.com"}},
+				{Name: "imported-example", DNSPool: "cn", DomainSuffix: []string{"example.cn"}},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := Config(testConfig(), rules.Normalized{Rules: tc.rules})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(out, "address /ippure.com/10.0.0.1") {
+				t.Fatalf("missing gateway rewrite for ippure.com:\n%s", out)
+			}
+			if strings.Contains(out, "nameserver /ippure.com/cn") {
+				t.Fatalf("dns_pool rule must not render for a gateway domain:\n%s", out)
+			}
+			if !strings.Contains(out, "nameserver /example.cn/cn") {
+				t.Fatalf("unrelated dns_pool rule must still render:\n%s", out)
+			}
+		})
+	}
+}
+
 func TestConfigRejectsUnsupportedDNSRewriteMatchers(t *testing.T) {
 	_, err := Config(testConfig(), rules.Normalized{Rules: []rules.Rule{
 		{Name: "keyword", Exit: "ss1", DomainKeyword: []string{"openai"}},

@@ -98,6 +98,9 @@ func addDomainRule(rule rules.Rule, domain string, gatewaySeen, poolSeen map[str
 		return fmt.Errorf("rule %q has empty domain matcher", rule.Name)
 	}
 	if rule.DNSOnly() {
+		if gatewaySeen[domain] {
+			return nil
+		}
 		key := rule.DNSPool + "\x00" + domain
 		if !poolSeen[key] {
 			*poolRules = append(*poolRules, dnsPoolRule{Domain: domain, Pool: rule.DNSPool})
@@ -107,8 +110,21 @@ func addDomainRule(rule rules.Rule, domain string, gatewaySeen, poolSeen map[str
 	}
 	if rule.Gateway() {
 		gatewaySeen[domain] = true
+		removePoolRulesForDomain(domain, poolSeen, poolRules)
 	}
 	return nil
+}
+
+func removePoolRulesForDomain(domain string, poolSeen map[string]bool, poolRules *[]dnsPoolRule) {
+	rules := (*poolRules)[:0]
+	for _, rule := range *poolRules {
+		if rule.Domain == domain {
+			delete(poolSeen, rule.Pool+"\x00"+rule.Domain)
+			continue
+		}
+		rules = append(rules, rule)
+	}
+	*poolRules = rules
 }
 
 func normalizeDomain(value string) string {

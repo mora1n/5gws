@@ -213,6 +213,7 @@ exit = "direct"
 
 - `dns_pool = "cn"`：DNS-only 规则，只影响 smartdns-rs 上游选择，不进入 HAProxy/quicgw。
 - `exit = "direct"` 或 `exit = "ss1"`：gateway 规则，内网 DNS 返回 `gateway_ip`，流量进入对应出口。
+- 同一域名同时命中 `exit` 和 `dns_pool` 时，`exit` 优先；手写 `[[rules]]` 先于 `[[imports]]` 处理，可用于覆盖导入规则。
 
 手写规则：
 
