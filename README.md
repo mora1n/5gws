@@ -26,13 +26,13 @@ nftables 只 redirect 同时匹配 `network.ingress_iface` 和 `network.internal
 一键安装并进入引导(需要root权限)：
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash
 ```
 
 固定版本：
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash -s -- --version 0.1.0
+wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash -s -- --version 0.1.0
 ```
 
 手动安装：
@@ -107,7 +107,7 @@ upstreams_overseas_public = ["https://cloudflare-dns.com/dns-query", "https://dn
 backend_resolvers = ["1.1.1.1:53", "1.0.0.1:53", "8.8.8.8:53", "8.8.4.4:53", "9.9.9.9:53", "22.22.22.22:53"]
 ```
 
-说明：5gpn 的 `PRIVATE_OVERSEAS_DNS` 默认是 `1.1.1.1/8.8.8.8/9.9.9.9`；5gws 当前按项目决策将 `upstreams_overseas_private` 固定为 `22.22.22.22`。
+默认 `upstreams_overseas_private` 只使用 `22.22.22.22`；`upstreams_overseas_public` 和 `backend_resolvers` 使用主流公共 DNS 与 `22.22.22.22`。
 
 shadowsocks-rust 出口：
 
@@ -200,15 +200,49 @@ exit = "direct"
 
 注意：该 ruleset 当前包含 `domain_regex`，v1 会显式拒绝，默认不启用。
 
-## iOS 证书
+## 客户端 DNS 设置
 
-启用 `[ios]` 后：
+5gws 的客户端侧只需要系统 DNS/DoT 配置，不需要安装代理客户端。
+
+### 苹果设备
+
+启用 `[ios]` 后生成证书、描述文件和二维码：
 
 ```sh
 5gws ios-link --config /etc/5gws/config.toml
 ```
 
-会生成 CA 证书、DoT mobileconfig、证书二维码和描述文件二维码。iPhone 可扫码或用 Safari 打开链接安装。
+命令会输出：
+
+- `cert`：CA 证书下载链接。
+- `profile`：DoT 描述文件下载链接。
+- `cert_qr`：CA 证书二维码。
+- `profile_qr`：DoT 描述文件二维码。
+
+安装步骤：
+
+1. iPhone / iPad 连接运营商内网。
+2. 扫描 `cert_qr` 或用 Safari 打开 `cert`，安装 CA 证书。
+3. 进入 `设置 -> 通用 -> 关于本机 -> 证书信任设置`，启用该 CA 的完全信任。
+4. 扫描 `profile_qr` 或用 Safari 打开 `profile`，安装 DoT 描述文件。
+5. 进入 `设置 -> 通用 -> VPN 与设备管理`，确认 `5gws DoT` 描述文件已安装。
+
+`ios.base_url` 必须是手机能访问到的地址；内置证书服务只允许 loopback 和 `network.internal_cidr` 来源访问。
+
+### Android
+
+Android 9+ 使用系统私人 DNS：
+
+1. 确保网关 DoT 入口有可访问的主机名，例如 `dot.example.com`。
+2. 进入 `设置 -> 网络和互联网 -> 私人 DNS`。
+3. 选择 `指定的私人 DNS 服务商主机名`。
+4. 填入 DoT 主机名，例如 `dot.example.com`，不要填 IP。
+5. 保存后关闭再打开移动网络，确认 DNS 生效。
+
+注意：
+
+- Android 私人 DNS 会按主机名校验证书，推荐使用域名和受信任证书。
+- 5gws 当前内置的 `ios-link` 生成的是面向 Apple 描述文件的本地 CA 和 `gateway_ip` 证书；stock Android 直接填 IP 或不信任该 CA 时可能无法建立 DoT。
 
 ## Telegram
 
