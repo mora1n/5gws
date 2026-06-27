@@ -19,6 +19,7 @@ type Config struct {
 	Network  NetworkConfig  `toml:"network"`
 	Routing  RoutingConfig  `toml:"routing"`
 	DNS      DNSConfig      `toml:"dns"`
+	Logging  LoggingConfig  `toml:"logging"`
 	IOS      IOSConfig      `toml:"ios"`
 	Telegram TelegramConfig `toml:"telegram"`
 	Exits    []ExitConfig   `toml:"exits"`
@@ -46,16 +47,24 @@ type RoutingConfig struct {
 
 type DNSConfig struct {
 	Binary                   string   `toml:"binary"`
+	DOTDomain                string   `toml:"dot_domain"`
 	ListenUDP                string   `toml:"listen_udp"`
 	ListenTCP                string   `toml:"listen_tcp"`
 	ListenDOT                string   `toml:"listen_dot"`
 	ListenPublicDOT          string   `toml:"listen_public_dot"`
 	BackendResolvers         []string `toml:"backend_resolvers"`
 	CertDir                  string   `toml:"cert_dir"`
+	CertFile                 string   `toml:"cert_file"`
+	KeyFile                  string   `toml:"key_file"`
 	CacheSize                int      `toml:"cache_size"`
 	UpstreamsCN              []string `toml:"upstreams_cn"`
 	UpstreamsOverseasPrivate []string `toml:"upstreams_overseas_private"`
 	UpstreamsOverseasPublic  []string `toml:"upstreams_overseas_public"`
+}
+
+type LoggingConfig struct {
+	Level  string `toml:"level"`
+	Access *bool  `toml:"access"`
 }
 
 type IOSConfig struct {
@@ -89,6 +98,14 @@ type ExitConfig struct {
 }
 
 func Load(path string) (Config, error) {
+	cfg, err := LoadDraft(path)
+	if err != nil {
+		return Config{}, err
+	}
+	return cfg, cfg.Validate()
+}
+
+func LoadDraft(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, err
@@ -99,7 +116,7 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.ApplyDefaults()
-	return cfg, cfg.Validate()
+	return cfg, nil
 }
 
 func (c *Config) ApplyDefaults() {
@@ -127,17 +144,20 @@ func (c *Config) ApplyDefaults() {
 	if c.Routing.FallbackExit == "" {
 		c.Routing.FallbackExit = "direct"
 	}
+	if c.Logging.Level == "" {
+		c.Logging.Level = "info"
+	}
 	if c.DNS.Binary == "" {
 		c.DNS.Binary = "smartdns"
 	}
 	if c.DNS.ListenUDP == "" {
-		c.DNS.ListenUDP = "127.0.0.1:1053"
+		c.DNS.ListenUDP = "0.0.0.0:1053"
 	}
 	if c.DNS.ListenTCP == "" {
-		c.DNS.ListenTCP = "127.0.0.1:1053"
+		c.DNS.ListenTCP = "0.0.0.0:1053"
 	}
 	if c.DNS.ListenDOT == "" {
-		c.DNS.ListenDOT = "127.0.0.1:1853"
+		c.DNS.ListenDOT = "0.0.0.0:1853"
 	}
 	if c.DNS.ListenPublicDOT == "" {
 		c.DNS.ListenPublicDOT = "0.0.0.0:853"
@@ -154,6 +174,12 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.DNS.CertDir == "" {
 		c.DNS.CertDir = c.System.StateDir + "/ios"
+	}
+	if c.DNS.CertFile == "" {
+		c.DNS.CertFile = c.System.ConfigDir + "/certs/fullchain.pem"
+	}
+	if c.DNS.KeyFile == "" {
+		c.DNS.KeyFile = c.System.ConfigDir + "/certs/privkey.pem"
 	}
 	if c.DNS.CacheSize == 0 {
 		c.DNS.CacheSize = 8192
@@ -218,6 +244,9 @@ func (c Config) Validate() error {
 	if err := validateDNS(c.DNS); err != nil {
 		return err
 	}
+	if err := validateLogging(c.Logging); err != nil {
+		return err
+	}
 	seen := map[string]bool{}
 	for _, exit := range c.Exits {
 		if err := validateExit(exit); err != nil {
@@ -234,6 +263,15 @@ func (c Config) Validate() error {
 	return nil
 }
 
+func validateLogging(l LoggingConfig) error {
+	switch l.Level {
+	case "debug", "info", "warn", "error":
+		return nil
+	default:
+		return fmt.Errorf("logging.level must be debug, info, warn, or error: %q", l.Level)
+	}
+}
+
 func validateDNS(d DNSConfig) error {
 	if d.Binary == "" {
 		return errors.New("dns.binary is required")
@@ -243,12 +281,18 @@ func validateDNS(d DNSConfig) error {
 		"dns.listen_tcp": d.ListenTCP,
 		"dns.listen_dot": d.ListenDOT,
 	} {
-		if err := validateHostPort(field, addr, true); err != nil {
+		if err := validateHostPort(field, addr, false); err != nil {
 			return err
 		}
 	}
 	if d.ListenPublicDOT != "" {
 		if err := validateHostPort("dns.listen_public_dot", d.ListenPublicDOT, false); err != nil {
+			return err
+		}
+		if d.DOTDomain == "" {
+			return errors.New("dns.dot_domain is required when dns.listen_public_dot is enabled")
+		}
+		if err := validateDomainName("dns.dot_domain", d.DOTDomain); err != nil {
 			return err
 		}
 	}
@@ -263,11 +307,43 @@ func validateDNS(d DNSConfig) error {
 	if d.CertDir == "" {
 		return errors.New("dns.cert_dir is required")
 	}
+	if (d.CertFile == "") != (d.KeyFile == "") {
+		return errors.New("dns.cert_file and dns.key_file must be configured together")
+	}
+	if d.ListenPublicDOT != "" && (d.CertFile == "" || d.KeyFile == "") {
+		return errors.New("dns.cert_file and dns.key_file are required when dns.listen_public_dot is enabled")
+	}
 	if d.CacheSize < 0 {
 		return errors.New("dns.cache_size must be >= 0")
 	}
 	if len(d.UpstreamsCN) == 0 || len(d.UpstreamsOverseasPrivate) == 0 || len(d.UpstreamsOverseasPublic) == 0 {
 		return errors.New("dns.upstreams_cn, dns.upstreams_overseas_private, and dns.upstreams_overseas_public are required")
+	}
+	return nil
+}
+
+func validateDomainName(field, value string) error {
+	if net.ParseIP(value) != nil {
+		return fmt.Errorf("%s must be a domain name, not an IP address: %q", field, value)
+	}
+	name := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(value)), ".")
+	if name == "" || len(name) > 253 || !strings.Contains(name, ".") {
+		return fmt.Errorf("%s is not a valid domain name: %q", field, value)
+	}
+	labels := strings.Split(name, ".")
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 {
+			return fmt.Errorf("%s is not a valid domain name: %q", field, value)
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return fmt.Errorf("%s is not a valid domain name: %q", field, value)
+		}
+		for _, r := range label {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+				continue
+			}
+			return fmt.Errorf("%s is not a valid domain name: %q", field, value)
+		}
 	}
 	return nil
 }
@@ -346,6 +422,10 @@ func validateSSKey(method, password string) error {
 		return fmt.Errorf("password key length for %s is %d bytes, want %d; generate one with: openssl rand -base64 %d", method, len(key), want, want)
 	}
 	return nil
+}
+
+func (l LoggingConfig) AccessEnabled() bool {
+	return l.Access == nil || *l.Access
 }
 
 func (e ExitConfig) TCPEnabled() bool {

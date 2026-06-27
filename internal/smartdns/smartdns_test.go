@@ -18,10 +18,12 @@ func TestConfigRendersAddressRules(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"bind 127.0.0.1:1053",
-		"bind-tcp 127.0.0.1:1053",
-		"bind-tls 127.0.0.1:1853",
+		"bind 0.0.0.0:1053",
+		"bind-tcp 0.0.0.0:1053",
+		"bind-tls 0.0.0.0:1853",
 		"bind-tls 0.0.0.0:853 -group overseas_public -no-rule-addr",
+		"bind-cert-file /etc/5gws/certs/fullchain.pem",
+		"bind-cert-key-file /etc/5gws/certs/privkey.pem",
 		"response-mode fastest-response",
 		"force-AAAA-SOA yes",
 		"force-qtype-SOA 64 65",
@@ -69,6 +71,9 @@ func testConfig() config.Config {
 			GatewayIP:    "10.0.0.1",
 			InternalCIDR: "10.0.0.0/24",
 			IngressIface: "eth0",
+		},
+		DNS: config.DNSConfig{
+			DOTDomain: "dot.example.com",
 		},
 		Exits: []config.ExitConfig{{Name: "direct", Type: "direct"}},
 	}

@@ -23,8 +23,8 @@ func Config(cfg config.Config, norm rules.Normalized) (string, error) {
 	if cfg.DNS.ListenPublicDOT != "" {
 		fmt.Fprintf(&b, "bind-tls %s -group overseas_public -no-rule-addr\n", cfg.DNS.ListenPublicDOT)
 	}
-	fmt.Fprintf(&b, "bind-cert-file %s/fullchain.pem\n", cfg.DNS.CertDir)
-	fmt.Fprintf(&b, "bind-cert-key-file %s/privkey.pem\n", cfg.DNS.CertDir)
+	fmt.Fprintf(&b, "bind-cert-file %s\n", cfg.DNS.CertFile)
+	fmt.Fprintf(&b, "bind-cert-key-file %s\n", cfg.DNS.KeyFile)
 	fmt.Fprintf(&b, "cache-size %d\n", cfg.DNS.CacheSize)
 	b.WriteString("response-mode fastest-response\n")
 	b.WriteString("force-AAAA-SOA yes\n")

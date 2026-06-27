@@ -7,7 +7,14 @@ ingress_iface = "eth0"
 fallback_exit = "direct"
 
 [dns]
+dot_domain = "dot.example.com"
+cert_file = "/etc/5gws/certs/fullchain.pem"
+key_file = "/etc/5gws/certs/privkey.pem"
 backend_resolvers = ["1.1.1.1:53", "1.0.0.1:53", "8.8.8.8:53", "8.8.4.4:53", "9.9.9.9:53", "22.22.22.22:53"]
+
+[logging]
+level = "info"
+access = true
 
 [ios]
 enabled = true

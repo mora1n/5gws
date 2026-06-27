@@ -91,9 +91,9 @@ func TestConfigSummaryRedactsPassword(t *testing.T) {
 			},
 			DNS: config.DNSConfig{
 				Binary:                   "smartdns",
-				ListenUDP:                "127.0.0.1:1053",
-				ListenTCP:                "127.0.0.1:1053",
-				ListenDOT:                "127.0.0.1:1853",
+				ListenUDP:                "0.0.0.0:1053",
+				ListenTCP:                "0.0.0.0:1053",
+				ListenDOT:                "0.0.0.0:1853",
 				ListenPublicDOT:          "0.0.0.0:853",
 				UpstreamsCN:              []string{"223.5.5.5"},
 				UpstreamsOverseasPrivate: []string{"22.22.22.22"},

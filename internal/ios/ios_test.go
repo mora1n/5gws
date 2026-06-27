@@ -3,17 +3,20 @@ package ios
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/morain/5gws/internal/config"
 )
 
-func TestGenerateWritesReadableServerKeyForSmartDNS(t *testing.T) {
+func TestGenerateWritesDOTProfileOnly(t *testing.T) {
 	dir := t.TempDir()
-	writeExistingFile(t, filepath.Join(dir, "privkey.pem"), 0o600)
 	cfg := config.Config{
 		Network: config.NetworkConfig{
 			GatewayIP: "10.0.0.1",
+		},
+		DNS: config.DNSConfig{
+			DOTDomain: "dot.example.com",
 		},
 		IOS: config.IOSConfig{
 			BaseURL:           "http://10.0.0.1:8088",
@@ -26,14 +29,16 @@ func TestGenerateWritesReadableServerKeyForSmartDNS(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertFileMode(t, filepath.Join(dir, "5gws-ca.key"), 0o600)
-	assertFileMode(t, filepath.Join(dir, "privkey.pem"), 0o644)
-}
-
-func writeExistingFile(t *testing.T, path string, mode os.FileMode) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte("old"), mode); err != nil {
+	data, err := os.ReadFile(filepath.Join(dir, "5gws-dot.mobileconfig"))
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "<string>dot.example.com</string>") {
+		t.Fatalf("profile does not use DoT domain:\n%s", string(data))
+	}
+	assertFileMode(t, filepath.Join(dir, "5gws-dot.mobileconfig"), 0o644)
+	if _, err := os.Stat(filepath.Join(dir, "5gws-ca.key")); !os.IsNotExist(err) {
+		t.Fatalf("Generate should not write local CA key, err=%v", err)
 	}
 }
 

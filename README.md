@@ -19,11 +19,11 @@ release 包只包含：
 - TCP/QUIC 有 Host/SNI 但未命中规则：走 `routing.fallback_exit`。
 - 缺 Host/SNI：拒绝，不做静默兜底。
 
-nftables 只 redirect 同时匹配 `network.ingress_iface` 和 `network.internal_cidr` 的 80/443/53/853；非内网来源的默认 80/443 不受 5gws 影响。
+nftables 只 redirect 同时匹配 `network.ingress_iface` 和 `network.internal_cidr` 的 80/443/53/853；5gws 不监听公网 `0.0.0.0:80/443`，高位 redirect 后端端口只允许内网来源访问，非内网来源的默认 80/443 不受影响。
 
 ## 安装
 
-可选：如果 Android 私人 DNS 或公网 DoT 要使用域名，先在 DNS 服务商添加一条 A 记录：
+先在 DNS 服务商添加一条 DoT 域名 A 记录：
 
 - 子域示例：`dot.example.com`。
 - A 记录指向 VPS 公网 IP。
@@ -58,20 +58,21 @@ sudo 5gws doctor
 sudo 5gws apply
 ```
 
-首次缺少 `/etc/5gws/config.toml` 或 `/etc/5gws/rules.toml` 时，`5gws install` 会进入引导：
+`5gws install` 会进入引导；如果 `/etc/5gws/config.toml` 已存在，会把已配置值显示为默认值，直接按 Enter 保留：
 
 - `gateway IP`：默认读取入口网卡 IPv4，失败时为 `10.0.0.1`。
 - `carrier internal CIDR`：默认 `172.22.0.0/16`。
 - `ingress interface`：默认来自 `ip route show default`。
-- `enable Apple/iOS profile flow`：默认启用，自动生成 iOS 证书和描述文件下载服务。
+- `DoT domain`：首次安装必须输入，没有默认值；后续默认使用已配置的 `dns.dot_domain`。
+- `enable Apple/iOS profile flow`：默认启用，自动生成 iOS 描述文件下载服务。
 
-如果配置文件已存在，`5gws install` 会复用现有配置，不会默认覆盖。需要重新引导时显式执行：
+需要重新生成默认规则文件时显式执行：
 
 ```sh
 sudo 5gws install --reconfigure
 ```
 
-启用 Apple/iOS 流程后，安装完成会直接在终端显示 CA 证书和描述文件二维码；后续也可手动执行：
+启用 Apple/iOS 流程后，安装完成会直接在终端显示描述文件二维码；后续也可手动执行：
 
 ```sh
 sudo 5gws ios-link --config /etc/5gws/config.toml
@@ -97,6 +98,13 @@ sudo 5gws uninstall --purge --yes
 5gws doctor --config ./config.example.toml --rules ./rules.example.toml
 ```
 
+查看日志和排查内网来源：
+
+```sh
+sudo 5gws logs --component all --since "10m" --lines 200
+sudo 5gws detect-cidr --seconds 30
+```
+
 `cert-server`、`quicgw`、`bot` 主要用于调试；正常部署由 `5gws apply` 按配置自动生成 systemd 服务并启动。
 
 ## config.toml
@@ -112,6 +120,15 @@ ingress_iface = "eth0"
 [routing]
 fallback_exit = "direct"
 
+[dns]
+dot_domain = "dot.example.com"
+cert_file = "/etc/5gws/certs/fullchain.pem"
+key_file = "/etc/5gws/certs/privkey.pem"
+
+[logging]
+level = "info"
+access = true
+
 [[exits]]
 name = "direct"
 type = "direct"
@@ -123,12 +140,19 @@ type = "direct"
 - `network.internal_cidr`：运营商内网来源段，默认 `172.22.0.0/16`。
 - `network.ingress_iface`：接收运营商内网流量的网卡。
 - `routing.fallback_exit`：TCP/QUIC 未命中显式 gateway 规则时使用的出口，默认 `direct`。
+- `dns.dot_domain`：公网 DoT 域名，Android 私人 DNS 和 iOS 描述文件都使用这个主机名。
+- `dns.cert_file/key_file`：DoT 公开证书和私钥，`5gws install` 会用 certbot 签发并部署到默认路径。
 - `dns.backend_resolvers`：HAProxy 解析真实目标域名使用的 DNS，不能指向会返回 `gateway_ip` 的 rewrite 入口。
+- `logging.level`：`debug` / `info` / `warn` / `error`，默认 `info`。
+- `logging.access`：是否输出 HAProxy TCP/HTTP access log，默认 `true`。
 
 smartdns-rs 上游 DNS 默认已内置，可按需覆盖：
 
 ```toml
 [dns]
+dot_domain = "dot.example.com"
+cert_file = "/etc/5gws/certs/fullchain.pem"
+key_file = "/etc/5gws/certs/privkey.pem"
 upstreams_cn = ["https://223.5.5.5/dns-query", "223.5.5.5", "119.29.29.29"]
 upstreams_overseas_private = ["22.22.22.22"]
 upstreams_overseas_public = ["https://cloudflare-dns.com/dns-query", "https://dns.google/dns-query", "https://dns.quad9.net/dns-query", "1.1.1.1", "1.0.0.1", "8.8.8.8", "8.8.4.4", "9.9.9.9", "22.22.22.22"]
@@ -234,7 +258,7 @@ exit = "direct"
 
 ### 苹果设备
 
-启用 `[ios]` 后生成证书、描述文件和二维码：
+启用 `[ios]` 后生成描述文件和二维码：
 
 ```sh
 sudo 5gws ios-link --config /etc/5gws/config.toml
@@ -242,12 +266,10 @@ sudo 5gws ios-link --config /etc/5gws/config.toml
 
 命令会输出：
 
-- `cert`：CA 证书下载链接。
 - `profile`：DoT 描述文件下载链接。
-- `cert_qr`：CA 证书二维码。
 - `profile_qr`：DoT 描述文件二维码。
 
-终端会直接显示 CA 证书和描述文件二维码，方便调试时扫码。脚本或 Telegram 场景可使用 `--no-qr` 只输出链接：
+终端会直接显示描述文件二维码，方便调试时扫码。脚本或 Telegram 场景可使用 `--no-qr` 只输出链接：
 
 ```sh
 sudo 5gws ios-link --config /etc/5gws/config.toml --no-qr
@@ -256,10 +278,8 @@ sudo 5gws ios-link --config /etc/5gws/config.toml --no-qr
 安装步骤：
 
 1. iPhone / iPad 连接运营商内网。
-2. 扫描 `cert_qr` 或用 Safari 打开 `cert`，安装 CA 证书。
-3. 进入 `设置 -> 通用 -> 关于本机 -> 证书信任设置`，启用该 CA 的完全信任。
-4. 扫描 `profile_qr` 或用 Safari 打开 `profile`，安装 DoT 描述文件。
-5. 进入 `设置 -> 通用 -> VPN 与设备管理`，确认 `5gws DoT` 描述文件已安装。
+2. 扫描 `profile_qr` 或用 Safari 打开 `profile`，安装 DoT 描述文件。
+3. 进入 `设置 -> 通用 -> VPN 与设备管理`，确认 `5gws DoT` 描述文件已安装。
 
 `ios.base_url` 必须是手机能访问到的地址；内置证书服务只允许 loopback 和 `network.internal_cidr` 来源访问。正常安装后证书服务由 `5gws apply` 自动管理，不需要手动运行 `cert-server`。
 
@@ -267,16 +287,15 @@ sudo 5gws ios-link --config /etc/5gws/config.toml --no-qr
 
 Android 9+ 使用系统私人 DNS：
 
-1. 确保网关 DoT 入口有可访问的主机名，例如 `dot.example.com`。
+1. 确保 `dns.dot_domain` 已解析到 `network.gateway_ip`，且证书校验正常。
 2. 进入 `设置 -> 网络和互联网 -> 私人 DNS`。
 3. 选择 `指定的私人 DNS 服务商主机名`。
-4. 填入 DoT 主机名，例如 `dot.example.com`，不要填 IP。
+4. 填入 `dns.dot_domain`，不要填 IP。
 5. 保存后关闭再打开移动网络，确认 DNS 生效。
 
 注意：
 
-- Android 私人 DNS 会按主机名校验证书，推荐使用域名和受信任证书。
-- 5gws 当前内置的 `ios-link` 生成的是面向 Apple 描述文件的本地 CA 和 `gateway_ip` 证书；stock Android 直接填 IP 或不信任该 CA 时可能无法建立 DoT。
+- Android 私人 DNS 会按主机名校验证书；5gws 使用 certbot 签发的公开证书，不使用自签 CA 作为 Android 主路径。
 
 ## Telegram
 
@@ -301,7 +320,7 @@ bot 支持命令和按钮菜单：
 /menu    打开菜单
 /status  查看 5gws 服务状态
 /doctor  检查配置、规则和运行依赖
-/ios     输出 CA 证书和 iOS 描述文件链接
+/ios     输出 iOS 描述文件链接
 /config  查看配置摘要，隐藏密码
 /rules   查看 rules.toml 摘要，不下载远程 ruleset
 /logs    查看运行日志，默认 60 行

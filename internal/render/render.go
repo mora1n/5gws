@@ -36,7 +36,7 @@ func Generate(cfg config.Config, norm rules.Normalized) ([]OutputFile, error) {
 		{"haproxy/haproxy.cfg", HAProxy(cfg, norm), 0o600},
 		{"nftables/5gws.nft", NFTables(cfg), 0o600},
 		{"smartdns/smartdns.conf", smartdnsConf, 0o600},
-		{"systemd/5gws-smartdns.service", serviceUnit("5gws smartdns-rs", serviceBinary(cfg.DNS.Binary)+" run -c "+cfg.System.StateDir+"/rendered/smartdns/smartdns.conf"), 0o644},
+		{"systemd/5gws-smartdns.service", serviceUnit("5gws smartdns-rs", smartDNSCommand(cfg)), 0o644},
 		{"systemd/5gws-haproxy.service", serviceUnit("5gws haproxy", "/usr/sbin/haproxy -Ws -f "+cfg.System.StateDir+"/rendered/haproxy/haproxy.cfg"), 0o644},
 		{"systemd/5gws-quic.service", serviceUnit("5gws quic gateway", "/usr/local/bin/5gws quicgw --config "+cfg.System.ConfigDir+"/config.toml --rules "+cfg.System.ConfigDir+"/rules.toml"), 0o644},
 	}
@@ -110,11 +110,13 @@ func HAProxy(cfg config.Config, norm rules.Normalized) string {
 		Rules        []ruleView
 		Exits        []exitView
 		FallbackExit string
+		AccessLog    bool
 	}{
 		Config:       cfg,
 		Rules:        buildRuleViews(gatewayRules),
 		Exits:        buildExitViews(cfg, exits),
 		FallbackExit: sanitize(cfg.Routing.FallbackExit),
+		AccessLog:    cfg.Logging.AccessEnabled(),
 	}
 	return mustExecute(haproxyTemplate, data)
 }
@@ -219,6 +221,20 @@ func serviceBinary(name string) string {
 	return "/usr/local/bin/" + name
 }
 
+func smartDNSCommand(cfg config.Config) string {
+	cmd := serviceBinary(cfg.DNS.Binary) + " run -c " + cfg.System.StateDir + "/rendered/smartdns/smartdns.conf"
+	switch cfg.Logging.Level {
+	case "debug":
+		return cmd + " -v"
+	case "warn":
+		return cmd + " -q"
+	case "error":
+		return cmd + " -q -q"
+	default:
+		return cmd
+	}
+}
+
 func mustPort(addr string) int {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -252,9 +268,12 @@ resolvers realdns
     hold valid 10s
 
 frontend http_in
-    bind 127.0.0.1:{{ .Config.Network.HTTPRedirectPort }}
+    bind 0.0.0.0:{{ .Config.Network.HTTPRedirectPort }}
     mode http
+{{- if .AccessLog }}
     option httplog
+    log-format "5gws http src=%ci:%cp fe=%ft be=%b host=%[var(txn.host)] status=%ST bytes=%B term=%ts"
+{{- end }}
     http-request set-var(txn.host) req.hdr(host),lower
     acl has_host var(txn.host) -m found
 {{- range .Rules }}
@@ -280,12 +299,18 @@ frontend http_in
     default_backend http_{{ .FallbackExit }}
 
 frontend tls_in
-    bind 127.0.0.1:{{ .Config.Network.HTTPSRedirectPort }}
+    bind 0.0.0.0:{{ .Config.Network.HTTPSRedirectPort }}
     mode tcp
+{{- if .AccessLog }}
     option tcplog
+    log-format "5gws tls src=%ci:%cp fe=%ft be=%b sni=%[var(sess.sni)] dst=%[var(sess.dst)] bytes=%B term=%ts"
+{{- end }}
     tcp-request inspect-delay 5s
-    tcp-request content accept if { req_ssl_hello_type 1 }
     acl has_sni req.ssl_sni -m found
+    tcp-request content set-var(sess.sni) req.ssl_sni if has_sni
+    tcp-request content do-resolve(sess.dst,realdns,ipv4) var(sess.sni) if has_sni
+    tcp-request content set-dst var(sess.dst) if has_sni
+    tcp-request content accept if { req_ssl_hello_type 1 }
 {{- range .Rules }}
 {{- $rv := . }}
 {{- range .Rule.Domain }}
@@ -317,8 +342,6 @@ backend http_{{ san .Name }}
 
 backend tls_{{ san .Name }}
     mode tcp
-    tcp-request content do-resolve(sess.dst,realdns,ipv4) req.ssl_sni
-    tcp-request content set-dst var(sess.dst)
     server dyn 0.0.0.0:443{{ if .Socks4 }} socks4 {{ .Socks4 }}{{ end }}
 {{ end }}
 `
@@ -330,18 +353,18 @@ destroy table inet fivegws
 table inet fivegws {
     chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport 53 redirect to :{{ .DNSUDPPort }}
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 53 redirect to :{{ .DNSTCPPort }}
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 853 redirect to :{{ .DNSDOTPort }}
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 80 redirect to :{{ .Config.Network.HTTPRedirectPort }}
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 443 redirect to :{{ .Config.Network.HTTPSRedirectPort }}
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport 443 redirect to :{{ .Config.Network.QUICRedirectPort }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport 53 counter redirect to :{{ .DNSUDPPort }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 53 counter redirect to :{{ .DNSTCPPort }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 853 counter redirect to :{{ .DNSDOTPort }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 80 counter redirect to :{{ .Config.Network.HTTPRedirectPort }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 443 counter redirect to :{{ .Config.Network.HTTPSRedirectPort }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport 443 counter redirect to :{{ .Config.Network.QUICRedirectPort }}
     }
 
     chain input {
         type filter hook input priority filter; policy accept;
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport { 53, 443, {{ .DNSUDPPort }} } accept
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport { 53, 853, {{ .DNSTCPPort }}, {{ .DNSDOTPort }} } accept
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr != {{ .Config.Network.InternalCIDR }} udp dport { {{ .DNSUDPPort }}, {{ .Config.Network.QUICRedirectPort }} } drop
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr != {{ .Config.Network.InternalCIDR }} tcp dport { {{ .DNSTCPPort }}, {{ .DNSDOTPort }}, {{ .Config.Network.HTTPRedirectPort }}, {{ .Config.Network.HTTPSRedirectPort }} } reject with tcp reset
     }
 }
 `

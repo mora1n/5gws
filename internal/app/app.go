@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/morain/5gws/internal/config"
 	"github.com/morain/5gws/internal/installer"
@@ -50,6 +51,10 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return cmdUninstall(args[1:], stdout)
 	case "doctor":
 		return cmdDoctor(args[1:], stdout)
+	case "logs":
+		return cmdLogs(args[1:], stdout)
+	case "detect-cidr":
+		return cmdDetectCIDR(args[1:], stdout)
 	case "status":
 		return cmdStatus(stdout)
 	case "ios-link":
@@ -72,11 +77,13 @@ Main:
   install           guided install and enable services
   apply             render config and restart services
   doctor            validate config and runtime deps
+  logs              show journald logs for 5gws services
+  detect-cidr       observe client source IPs for internal_cidr
   status            show service status
   uninstall         remove 5gws services and state
 
 Client:
-  ios-link          generate iOS cert/profile links and QR codes
+  ios-link          generate iOS profile link and QR code
 
 Tools:
   render            render files for inspection
@@ -163,6 +170,9 @@ func cmdInstall(args []string, stdin io.Reader, out io.Writer) error {
 		if err := installer.EnsureRuntime(cfg, true, out); err != nil {
 			return err
 		}
+		if err := ensureDOTCertificate(cfg, true, out); err != nil {
+			return err
+		}
 		printIOSInstallHint(out, cfg, *cfgPath, true)
 		fmt.Fprintln(out, "dry-run: no files or services changed")
 		return nil
@@ -171,6 +181,9 @@ func cmdInstall(args []string, stdin io.Reader, out io.Writer) error {
 		return err
 	}
 	if err := installer.EnsureRuntime(cfg, false, out); err != nil {
+		return err
+	}
+	if err := ensureDOTCertificate(cfg, false, out); err != nil {
 		return err
 	}
 	if generated.config != "" || generated.rules != "" {
@@ -266,6 +279,7 @@ func cmdDoctor(args []string, out io.Writer) error {
 	} else {
 		fmt.Fprintf(out, "smartdns-rs: missing (%s)\n", cfg.DNS.Binary)
 	}
+	writeDoctorRuntime(out, cfg)
 	for _, exit := range cfg.Exits {
 		if exit.Type != "shadowsocks-rust" {
 			continue
@@ -312,12 +326,9 @@ func cmdIOSLink(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "cert: %s\nprofile: %s\ncert_qr: %s\nprofile_qr: %s\n", links.CertURL, links.ProfileURL, links.CertQR, links.ProfileQR)
+	fmt.Fprintf(out, "profile: %s\nprofile_qr: %s\n", links.ProfileURL, links.ProfileQR)
 	if *noQR {
 		return nil
-	}
-	if err := printTerminalQR(out, "CA certificate QR", links.CertURL); err != nil {
-		return err
 	}
 	return printTerminalQR(out, "iOS profile QR", links.ProfileURL)
 }
@@ -402,78 +413,100 @@ type generatedInputs struct {
 }
 
 func loadOrWizard(cfgPath, rulesPath string, reader *bufio.Reader, out io.Writer, assumeYes, reconfigure bool) (config.Config, rules.Normalized, generatedInputs, error) {
+	existing, hasExisting := loadExistingDraft(cfgPath)
 	if reconfigure {
 		fmt.Fprintln(out, "reconfigure requested; starting guided bootstrap")
-		cfgText, rulesText := wizard(reader, out, assumeYes)
+		cfgText, rulesText := wizard(reader, out, assumeYes, existing, hasExisting)
 		cfg, norm, err := parseGenerated(cfgText, rulesText)
 		return cfg, norm, generatedInputs{config: cfgText, rules: rulesText}, err
 	}
-	cfg, norm, err := loadAll(cfgPath, rulesPath)
-	if err == nil {
-		fmt.Fprintf(out, "using existing %s and %s; run 5gws install --reconfigure to rerun guided setup\n", cfgPath, rulesPath)
-		return cfg, norm, generatedInputs{}, nil
-	}
-	if !os.IsNotExist(err) {
-		return config.Config{}, rules.Normalized{}, generatedInputs{}, err
-	}
-	fmt.Fprintln(out, "config or rules file missing; starting guided bootstrap")
 	cfgText, rulesText := "", ""
-	if !fileExists(cfgPath) {
-		cfgText, _ = wizard(reader, out, assumeYes)
+	if hasExisting {
+		fmt.Fprintf(out, "using existing %s as install defaults\n", cfgPath)
+		cfgText, _ = wizard(reader, out, assumeYes, existing, true)
+	} else {
+		fmt.Fprintln(out, "config file missing; starting guided bootstrap")
+		cfgText, _ = wizard(reader, out, assumeYes, config.Config{}, false)
 	}
 	if !fileExists(rulesPath) {
 		rulesText = defaultRulesText()
 	}
-	cfg, norm, err = parseGeneratedOrExisting(cfgPath, rulesPath, cfgText, rulesText)
+	cfg, norm, err := parseGeneratedOrExisting(cfgPath, rulesPath, cfgText, rulesText)
 	return cfg, norm, generatedInputs{config: cfgText, rules: rulesText}, err
 }
 
-func wizard(reader *bufio.Reader, out io.Writer, assumeYes bool) (string, string) {
-	return wizardWithDefaults(reader, out, assumeYes, detectWizardDefaults())
+func loadExistingDraft(cfgPath string) (config.Config, bool) {
+	cfg, err := config.LoadDraft(cfgPath)
+	return cfg, err == nil
+}
+
+func wizard(reader *bufio.Reader, out io.Writer, assumeYes bool, existing config.Config, hasExisting bool) (string, string) {
+	return wizardWithDefaults(reader, out, assumeYes, detectWizardDefaults(existing, hasExisting))
 }
 
 type wizardDefaults struct {
 	GatewayIP    string
 	InternalCIDR string
 	IngressIface string
+	DOTDomain    string
+	AppleEnabled bool
+	HasApple     bool
+	Config       config.Config
 }
 
 func wizardWithDefaults(reader *bufio.Reader, out io.Writer, assumeYes bool, defaults wizardDefaults) (string, string) {
 	gateway := prompt(reader, out, "gateway IP", defaults.GatewayIP, assumeYes)
 	cidr := prompt(reader, out, "carrier internal CIDR", defaults.InternalCIDR, assumeYes)
 	iface := prompt(reader, out, "ingress interface", defaults.IngressIface, assumeYes)
-	apple := promptBool(reader, out, "enable Apple/iOS profile flow", true, assumeYes)
-	iosConfig := `[ios]
-enabled = false
-`
-	if apple {
-		iosConfig = fmt.Sprintf(`[ios]
-enabled = true
-listen = "0.0.0.0:8088"
-base_url = "http://%s:8088"
-organization = "5gws"
-profile_identifier = "dev.5gws.dot"
-`, gateway)
+	dotDomain := promptRequired(reader, out, "DoT domain", defaults.DOTDomain, assumeYes)
+	appleDefault := true
+	if defaults.HasApple {
+		appleDefault = defaults.AppleEnabled
 	}
-	configText := fmt.Sprintf(`[network]
-gateway_ip = %q
-internal_cidr = %q
-ingress_iface = %q
-
-%s
-[[exits]]
-name = "direct"
-type = "direct"
-fwmark = 0
-`, gateway, cidr, iface, iosConfig)
+	apple := promptBool(reader, out, "enable Apple/iOS profile flow", appleDefault, assumeYes)
+	cfg := defaults.Config
+	cfg.Network.GatewayIP = gateway
+	cfg.Network.InternalCIDR = cidr
+	cfg.Network.IngressIface = iface
+	cfg.DNS.DOTDomain = strings.ToLower(strings.TrimSuffix(dotDomain, "."))
+	cfg.DNS.CertFile = "/etc/5gws/certs/fullchain.pem"
+	cfg.DNS.KeyFile = "/etc/5gws/certs/privkey.pem"
+	cfg.IOS.Enabled = apple
+	if apple {
+		cfg.IOS.Listen = valueOr(cfg.IOS.Listen, "0.0.0.0:8088")
+		cfg.IOS.BaseURL = "http://" + gateway + ":8088"
+		cfg.IOS.Organization = valueOr(cfg.IOS.Organization, "5gws")
+		cfg.IOS.ProfileIdentifier = valueOr(cfg.IOS.ProfileIdentifier, "dev.5gws.dot")
+	}
+	if len(cfg.Exits) == 0 {
+		cfg.Exits = []config.ExitConfig{{Name: "direct", Type: "direct", FWMark: 0}}
+	}
+	cfg.ApplyDefaults()
+	configText, err := encodeConfig(cfg)
+	if err != nil {
+		return "", ""
+	}
 	return configText, defaultRulesText()
 }
 
-func detectWizardDefaults() wizardDefaults {
+func detectWizardDefaults(existing config.Config, hasExisting bool) wizardDefaults {
 	defaults := wizardDefaults{
 		GatewayIP:    "10.0.0.1",
 		InternalCIDR: "172.22.0.0/16",
 		IngressIface: "eth0",
+		AppleEnabled: true,
+	}
+	if hasExisting {
+		defaults.GatewayIP = existing.Network.GatewayIP
+		defaults.InternalCIDR = existing.Network.InternalCIDR
+		defaults.IngressIface = existing.Network.IngressIface
+		defaults.DOTDomain = existing.DNS.DOTDomain
+		defaults.AppleEnabled = existing.IOS.Enabled
+		defaults.HasApple = true
+		defaults.Config = existing
+		if defaults.GatewayIP != "" && defaults.InternalCIDR != "" && defaults.IngressIface != "" {
+			return defaults
+		}
 	}
 	data, err := exec.Command("ip", "route", "show", "default").Output()
 	if err != nil {
@@ -488,6 +521,99 @@ func detectWizardDefaults() wizardDefaults {
 		defaults.GatewayIP = ip
 	}
 	return defaults
+}
+
+func encodeConfig(cfg config.Config) (string, error) {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[network]\ngateway_ip = %q\ninternal_cidr = %q\ningress_iface = %q\n", cfg.Network.GatewayIP, cfg.Network.InternalCIDR, cfg.Network.IngressIface)
+	writeNonZeroInt(&b, "http_redirect_port", cfg.Network.HTTPRedirectPort, 18080)
+	writeNonZeroInt(&b, "https_redirect_port", cfg.Network.HTTPSRedirectPort, 18443)
+	writeNonZeroInt(&b, "quic_redirect_port", cfg.Network.QUICRedirectPort, 18443)
+	fmt.Fprintf(&b, "\n[routing]\nfallback_exit = %q\n", cfg.Routing.FallbackExit)
+	fmt.Fprintf(&b, "\n[dns]\ndot_domain = %q\ncert_file = %q\nkey_file = %q\n", cfg.DNS.DOTDomain, cfg.DNS.CertFile, cfg.DNS.KeyFile)
+	writeStringSlice(&b, "backend_resolvers", cfg.DNS.BackendResolvers, nil)
+	writeStringSlice(&b, "upstreams_cn", cfg.DNS.UpstreamsCN, nil)
+	writeStringSlice(&b, "upstreams_overseas_private", cfg.DNS.UpstreamsOverseasPrivate, nil)
+	writeStringSlice(&b, "upstreams_overseas_public", cfg.DNS.UpstreamsOverseasPublic, nil)
+	fmt.Fprintf(&b, "\n[logging]\nlevel = %q\naccess = %t\n", cfg.Logging.Level, cfg.Logging.AccessEnabled())
+	fmt.Fprintf(&b, "\n[ios]\nenabled = %t\n", cfg.IOS.Enabled)
+	if cfg.IOS.Enabled {
+		fmt.Fprintf(&b, "listen = %q\nbase_url = %q\norganization = %q\nprofile_identifier = %q\n", cfg.IOS.Listen, cfg.IOS.BaseURL, cfg.IOS.Organization, cfg.IOS.ProfileIdentifier)
+	}
+	if cfg.Telegram.Enabled || cfg.Telegram.BotEnv != "" || len(cfg.Telegram.AllowedUsers) > 0 {
+		fmt.Fprintf(&b, "\n[telegram]\nenabled = %t\n", cfg.Telegram.Enabled)
+		if cfg.Telegram.BotEnv != "" {
+			fmt.Fprintf(&b, "bot_env = %q\n", cfg.Telegram.BotEnv)
+		}
+		writeStringSlice(&b, "allowed_users", cfg.Telegram.AllowedUsers, nil)
+	}
+	for _, exit := range cfg.Exits {
+		writeExitConfig(&b, exit)
+	}
+	return b.String(), nil
+}
+
+func valueOr(value, fallback string) string {
+	if value != "" {
+		return value
+	}
+	return fallback
+}
+
+func writeNonZeroInt(b *strings.Builder, name string, value, defaultValue int) {
+	if value != 0 && value != defaultValue {
+		fmt.Fprintf(b, "%s = %d\n", name, value)
+	}
+}
+
+func writeStringSlice(b *strings.Builder, name string, values, defaultValues []string) {
+	if len(values) == 0 || sameStrings(values, defaultValues) {
+		return
+	}
+	fmt.Fprintf(b, "%s = [", name)
+	for i, value := range values {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(b, "%q", value)
+	}
+	b.WriteString("]\n")
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func writeExitConfig(b *strings.Builder, exit config.ExitConfig) {
+	fmt.Fprintf(b, "\n[[exits]]\nname = %q\ntype = %q\n", exit.Name, exit.Type)
+	if exit.FWMark != 0 {
+		fmt.Fprintf(b, "fwmark = %d\n", exit.FWMark)
+	}
+	if exit.Type != "shadowsocks-rust" {
+		return
+	}
+	fmt.Fprintf(b, "server = %q\nserver_port = %d\nmethod = %q\npassword = %q\n", exit.Server, exit.ServerPort, exit.Method, exit.Password)
+	if exit.Username != "" {
+		fmt.Fprintf(b, "username = %q\n", exit.Username)
+	}
+	fmt.Fprintf(b, "listen_address = %q\nlisten_port = %d\n", exit.ListenAddress, exit.ListenPort)
+	if exit.TCP != nil {
+		fmt.Fprintf(b, "tcp = %t\n", *exit.TCP)
+	}
+	if exit.UDP != nil {
+		fmt.Fprintf(b, "udp = %t\n", *exit.UDP)
+	}
+	if exit.TimeoutSeconds != 0 {
+		fmt.Fprintf(b, "timeout_seconds = %d\n", exit.TimeoutSeconds)
+	}
 }
 
 func parseDefaultIface(output string) string {
@@ -537,6 +663,35 @@ func prompt(reader *bufio.Reader, out io.Writer, label, fallback string, assumeY
 		return fallback
 	}
 	return value
+}
+
+func promptRequired(reader *bufio.Reader, out io.Writer, label, fallback string, assumeYes bool) string {
+	if assumeYes {
+		if fallback == "" {
+			return ""
+		}
+		fmt.Fprintf(out, "%s: %s\n", label, fallback)
+		return fallback
+	}
+	for {
+		if fallback == "" {
+			fmt.Fprintf(out, "%s: ", label)
+		} else {
+			fmt.Fprintf(out, "%s [%s]: ", label, fallback)
+		}
+		line, err := reader.ReadString('\n')
+		value := strings.TrimSpace(line)
+		if value != "" {
+			return value
+		}
+		if fallback != "" {
+			return fallback
+		}
+		if err != nil {
+			return ""
+		}
+		fmt.Fprintf(out, "%s is required\n", label)
+	}
 }
 
 func promptBool(reader *bufio.Reader, out io.Writer, label string, fallback, assumeYes bool) bool {
@@ -664,6 +819,7 @@ func printInstallSummary(w io.Writer, cfg config.Config, norm rules.Normalized) 
 	fmt.Fprintf(w, "5gws install summary\n")
 	fmt.Fprintf(w, "config_dir: %s\nstate_dir: %s\n", cfg.System.ConfigDir, cfg.System.StateDir)
 	fmt.Fprintf(w, "internal_cidr: %s via %s\n", cfg.Network.InternalCIDR, cfg.Network.IngressIface)
+	fmt.Fprintf(w, "dot_domain: %s\n", cfg.DNS.DOTDomain)
 	fmt.Fprintf(w, "redirect: tcp/80->%d tcp/443->%d udp/443->%d\n", cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort, cfg.Network.QUICRedirectPort)
 	fmt.Fprintf(w, "rules: %d\n", len(norm.Rules))
 }
@@ -677,7 +833,7 @@ func printIOSInstallHint(out io.Writer, cfg config.Config, cfgPath string, dryRu
 		fmt.Fprintf(out, "dry-run: would print iOS QR codes with: 5gws ios-link --config %s\n", cfgPath)
 		return nil
 	}
-	fmt.Fprintln(out, "\niOS certificate/profile links:")
+	fmt.Fprintln(out, "\niOS profile links:")
 	return cmdIOSLink([]string{"--config", cfgPath}, out)
 }
 
@@ -685,6 +841,161 @@ func confirm(reader *bufio.Reader, out io.Writer, prompt string) bool {
 	fmt.Fprintf(out, "%s [y/N] ", prompt)
 	line, _ := reader.ReadString('\n')
 	return strings.EqualFold(strings.TrimSpace(line), "y")
+}
+
+func ensureDOTCertificate(cfg config.Config, dryRun bool, out io.Writer) error {
+	if cfg.DNS.ListenPublicDOT == "" {
+		return nil
+	}
+	if err := verifyDOTDomainA(cfg.DNS.DOTDomain, cfg.Network.GatewayIP); err != nil {
+		return err
+	}
+	liveDir := filepath.Join("/etc/letsencrypt/live", cfg.DNS.DOTDomain)
+	if dryRun {
+		fmt.Fprintf(out, "dry-run: would ensure certbot certificate for %s\n", cfg.DNS.DOTDomain)
+		fmt.Fprintf(out, "dry-run: would deploy cert to %s and %s\n", cfg.DNS.CertFile, cfg.DNS.KeyFile)
+		return nil
+	}
+	if err := ensureCertbot(out); err != nil {
+		return err
+	}
+	if !certificateValid(filepath.Join(liveDir, "fullchain.pem"), 30*24*time.Hour) {
+		if err := run(out, "certbot", "certonly", "--standalone", "-d", cfg.DNS.DOTDomain, "--non-interactive", "--agree-tos", "--register-unsafely-without-email", "--keep-until-expiring"); err != nil {
+			return err
+		}
+	}
+	if err := deployDOTCertificate(liveDir, cfg); err != nil {
+		return err
+	}
+	return installCertDeployHook(cfg, out)
+}
+
+func verifyDOTDomainA(domain, gatewayIP string) error {
+	addrs, err := net.LookupHost(domain)
+	if err != nil {
+		return fmt.Errorf("dns.dot_domain %q does not resolve: %w", domain, err)
+	}
+	for _, addr := range addrs {
+		if addr == gatewayIP {
+			return nil
+		}
+	}
+	return fmt.Errorf("dns.dot_domain %q resolves to %s, want gateway_ip %s", domain, strings.Join(addrs, ", "), gatewayIP)
+}
+
+func ensureCertbot(out io.Writer) error {
+	if path, err := exec.LookPath("certbot"); err == nil {
+		fmt.Fprintf(out, "certbot: %s\n", path)
+		return nil
+	}
+	if _, err := exec.LookPath("apt-get"); err != nil {
+		return errors.New("certbot is missing and apt-get is unavailable; install certbot manually")
+	}
+	if err := run(out, "apt-get", "update"); err != nil {
+		return err
+	}
+	return run(out, "apt-get", "install", "-y", "certbot")
+}
+
+func certificateValid(path string, minRemaining time.Duration) bool {
+	if _, err := os.Stat(path); err != nil {
+		return false
+	}
+	cmd := exec.Command("openssl", "x509", "-checkend", fmt.Sprint(int(minRemaining.Seconds())), "-noout", "-in", path)
+	return cmd.Run() == nil
+}
+
+func deployDOTCertificate(liveDir string, cfg config.Config) error {
+	certFile := cfg.DNS.CertFile
+	keyFile := cfg.DNS.KeyFile
+	if err := os.MkdirAll(filepath.Dir(certFile), 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(keyFile), 0o755); err != nil {
+		return err
+	}
+	if err := copyFile(filepath.Join(liveDir, "fullchain.pem"), certFile, 0o644); err != nil {
+		return err
+	}
+	if err := copyFile(filepath.Join(liveDir, "privkey.pem"), keyFile, 0o640); err != nil {
+		return err
+	}
+	return setDOTCertificatePermissions(cfg)
+}
+
+func setDOTCertificatePermissions(cfg config.Config) error {
+	for _, dir := range uniqueStrings([]string{filepath.Dir(cfg.DNS.CertFile), filepath.Dir(cfg.DNS.KeyFile)}) {
+		if err := os.Chown(dir, 0, 65534); err != nil {
+			return err
+		}
+		if err := os.Chmod(dir, 0o750); err != nil {
+			return err
+		}
+	}
+	if pathWithin(cfg.System.ConfigDir, cfg.DNS.CertFile) || pathWithin(cfg.System.ConfigDir, cfg.DNS.KeyFile) {
+		if err := os.Chmod(cfg.System.ConfigDir, 0o711); err != nil {
+			return err
+		}
+	}
+	if err := os.Chown(cfg.DNS.KeyFile, 0, 65534); err != nil {
+		return err
+	}
+	return os.Chmod(cfg.DNS.KeyFile, 0o640)
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func pathWithin(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func installCertDeployHook(cfg config.Config, out io.Writer) error {
+	hookDir := "/etc/letsencrypt/renewal-hooks/deploy"
+	if err := os.MkdirAll(hookDir, 0o755); err != nil {
+		return err
+	}
+	hook := fmt.Sprintf(`#!/bin/sh
+set -eu
+DOMAIN=%q
+LIVE=/etc/letsencrypt/live/$DOMAIN
+CERT_FILE=%q
+KEY_FILE=%q
+CONFIG_DIR=%q
+if [ -d "$LIVE" ]; then
+  chmod 711 "$CONFIG_DIR"
+  install -d -m 755 "$(dirname "$CERT_FILE")"
+  install -d -m 755 "$(dirname "$KEY_FILE")"
+  install -m 644 "$LIVE/fullchain.pem" "$CERT_FILE"
+  install -m 640 "$LIVE/privkey.pem" "$KEY_FILE"
+  chown root:65534 "$(dirname "$CERT_FILE")" "$(dirname "$KEY_FILE")" "$KEY_FILE"
+  chmod 750 "$(dirname "$CERT_FILE")" "$(dirname "$KEY_FILE")"
+  systemctl is-active --quiet 5gws-smartdns.service && systemctl restart 5gws-smartdns.service
+fi
+`, cfg.DNS.DOTDomain, cfg.DNS.CertFile, cfg.DNS.KeyFile, cfg.System.ConfigDir)
+	path := filepath.Join(hookDir, "99-5gws-dot-cert.sh")
+	if err := os.WriteFile(path, []byte(hook), 0o755); err != nil {
+		return err
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "cert deploy hook: %s\n", path)
+	return nil
 }
 
 func requireRoot() error {

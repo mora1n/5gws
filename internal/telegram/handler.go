@@ -125,7 +125,7 @@ func menuText() string {
 
 /status  服务状态
 /doctor  配置和运行依赖检查
-/ios     iOS 证书和描述文件链接
+/ios     iOS 描述文件链接
 /config  配置摘要
 /rules   规则摘要
 /logs    运行日志

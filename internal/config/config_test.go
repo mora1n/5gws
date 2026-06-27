@@ -15,6 +15,30 @@ func TestValidateRejectsUnsupportedExit(t *testing.T) {
 	}
 }
 
+func TestValidateRequiresDOTDomain(t *testing.T) {
+	cfg := validConfig()
+	cfg.DNS.DOTDomain = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected missing dot domain to be rejected")
+	}
+}
+
+func TestValidateRejectsIPDOTDomain(t *testing.T) {
+	cfg := validConfig()
+	cfg.DNS.DOTDomain = "10.0.0.1"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected IP dot domain to be rejected")
+	}
+}
+
+func TestValidateRejectsPartialDOTCertificatePaths(t *testing.T) {
+	cfg := validConfig()
+	cfg.DNS.KeyFile = ""
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected partial cert/key paths to be rejected")
+	}
+}
+
 func TestValidateRequiresShadowsocksFields(t *testing.T) {
 	cfg := validConfig()
 	cfg.Exits = append(cfg.Exits, ExitConfig{Name: "ss1", Type: "shadowsocks-rust"})
@@ -36,11 +60,13 @@ func TestValidateRejectsInvalid2022Key(t *testing.T) {
 func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	cfg := validConfig()
 	cfg.DNS = DNSConfig{}
+	cfg.DNS.DOTDomain = "dot.example.com"
+	cfg.Logging = LoggingConfig{}
 	cfg.ApplyDefaults()
 	if cfg.DNS.Binary != "smartdns" {
 		t.Fatalf("dns binary = %q, want smartdns", cfg.DNS.Binary)
 	}
-	if cfg.DNS.ListenUDP != "127.0.0.1:1053" {
+	if cfg.DNS.ListenUDP != "0.0.0.0:1053" {
 		t.Fatalf("listen_udp = %q", cfg.DNS.ListenUDP)
 	}
 	if len(cfg.DNS.UpstreamsCN) == 0 {
@@ -68,6 +94,20 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	})
 	if cfg.Routing.FallbackExit != "direct" {
 		t.Fatalf("fallback_exit = %q, want direct", cfg.Routing.FallbackExit)
+	}
+	if cfg.Logging.Level != "info" {
+		t.Fatalf("logging.level = %q, want info", cfg.Logging.Level)
+	}
+	if !cfg.Logging.AccessEnabled() {
+		t.Fatal("logging access should default to true")
+	}
+}
+
+func TestValidateRejectsInvalidLoggingLevel(t *testing.T) {
+	cfg := validConfig()
+	cfg.Logging.Level = "trace"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid logging level to be rejected")
 	}
 }
 
@@ -185,6 +225,9 @@ func validConfig() Config {
 			GatewayIP:    "10.0.0.1",
 			InternalCIDR: "10.0.0.0/24",
 			IngressIface: "eth0",
+		},
+		DNS: DNSConfig{
+			DOTDomain: "dot.example.com",
 		},
 		Exits: []ExitConfig{{Name: "direct", Type: "direct"}},
 	}

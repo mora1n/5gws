@@ -38,16 +38,17 @@ type packetConn interface {
 }
 
 func Run(ctx context.Context, cfg config.Config, norm rules.Normalized) error {
-	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.Network.QUICRedirectPort))
-	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	addr := net.JoinHostPort("0.0.0.0", strconv.Itoa(cfg.Network.QUICRedirectPort))
+	udpAddr, err := net.ResolveUDPAddr("udp4", addr)
 	if err != nil {
 		return err
 	}
-	conn, err := net.ListenUDP("udp", udpAddr)
+	conn, err := net.ListenUDP("udp4", udpAddr)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
+	log.Printf("quic gateway listening on %s rules=%d fallback_exit=%s", conn.LocalAddr(), len(norm.GatewayRules()), cfg.Routing.FallbackExit)
 	gw := &Gateway{cfg: cfg, rules: norm, listener: conn, sessions: map[string]*session{}}
 	go gw.gc(ctx)
 	return gw.serve(ctx)
@@ -107,24 +108,24 @@ func (g *Gateway) newSession(data []byte, addr *net.UDPAddr) {
 		return
 	}
 	if exit.Type == "shadowsocks-rust" && !exit.UDPEnabled() {
-		log.Printf("quic %s rejected: exit %q has udp=false", addr, exit.Name)
+		log.Printf("quic %s sni=%q rejected: exit %q has udp=false", addr, sni, exit.Name)
 		return
 	}
-	if !matched {
-		log.Printf("quic %s using fallback exit %q for SNI %q", addr, exit.Name, sni)
-	}
-	backend, err := connectBackend(sni, exit)
+	backend, target, err := connectBackend(sni, exit)
 	if err != nil {
-		log.Printf("quic %s rejected: %v", addr, err)
+		log.Printf("quic %s sni=%q exit=%q rejected: %v", addr, sni, exit.Name, err)
 		return
 	}
+	log.Printf("quic %s sni=%q matched=%t exit=%q backend=%s", addr, sni, matched, exit.Name, target)
 	sess := &session{clientAddr: addr, backendConn: backend, lastActivity: time.Now()}
 	key := addr.String()
 	g.mu.Lock()
 	if old, exists := g.sessions[key]; exists {
 		g.mu.Unlock()
 		backend.Close()
-		old.backendConn.Write(data)
+		if _, err := old.backendConn.Write(data); err != nil {
+			log.Printf("quic %s duplicate session backend write failed: %v", key, err)
+		}
 		return
 	}
 	g.sessions[key] = sess
@@ -152,38 +153,41 @@ func selectExit(cfg config.Config, norm rules.Normalized, sni string) (config.Ex
 	return exit, false, nil
 }
 
-func connectBackend(host string, exit config.ExitConfig) (packetConn, error) {
+func connectBackend(host string, exit config.ExitConfig) (packetConn, string, error) {
 	switch exit.Type {
 	case "direct":
 		return resolveDirectUDP(host, exit.FWMark)
 	case "shadowsocks-rust":
-		return dialSocksUDP(net.JoinHostPort(exit.ListenAddress, strconv.Itoa(exit.ListenPort)), host, 443)
+		proxyAddr := net.JoinHostPort(exit.ListenAddress, strconv.Itoa(exit.ListenPort))
+		conn, err := dialSocksUDP(proxyAddr, host, 443)
+		return conn, proxyAddr + " -> " + net.JoinHostPort(host, "443"), err
 	default:
-		return nil, fmt.Errorf("unsupported exit type %q", exit.Type)
+		return nil, "", fmt.Errorf("unsupported exit type %q", exit.Type)
 	}
 }
 
-func resolveDirectUDP(host string, mark int) (*net.UDPConn, error) {
+func resolveDirectUDP(host string, mark int) (*net.UDPConn, string, error) {
 	ips, err := net.LookupIP(host)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	for _, ip := range ips {
 		if ip4 := ip.To4(); ip4 != nil {
-			conn, err := net.DialUDP("udp", nil, &net.UDPAddr{IP: ip4, Port: 443})
+			target := &net.UDPAddr{IP: ip4, Port: 443}
+			conn, err := net.DialUDP("udp", nil, target)
 			if err != nil {
-				return nil, err
+				return nil, "", err
 			}
 			if mark != 0 {
 				if err := setMark(conn, mark); err != nil {
 					conn.Close()
-					return nil, err
+					return nil, "", err
 				}
 			}
-			return conn, nil
+			return conn, target.String(), nil
 		}
 	}
-	return nil, fmt.Errorf("%s resolved without IPv4 address", host)
+	return nil, "", fmt.Errorf("%s resolved without IPv4 address", host)
 }
 
 type socksUDPConn struct {
@@ -400,6 +404,7 @@ func (g *Gateway) relay(key string, sess *session) {
 	for {
 		n, err := sess.backendConn.Read(buf)
 		if err != nil {
+			log.Printf("quic %s backend read ended: %v", key, err)
 			g.remove(key)
 			return
 		}
