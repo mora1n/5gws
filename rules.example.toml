@@ -1,0 +1,24 @@
+# 默认接近 5gpn：
+# - CN 域名走国内 DNS pool。
+# - GFW 域名对内网客户端返回 gateway_ip，再进入 HAProxy/quicgw。
+
+[[imports]]
+name = "cn"
+type = "sing-box"
+url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.json"
+dns_pool = "cn"
+
+[[imports]]
+name = "gfw"
+type = "sing-box"
+url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/gfw.json"
+exit = "direct"
+
+# 如果要额外把某些域名送到 shadowsocks-rust 出口：
+# 1. 先在 config.toml 中配置同名 [[exits]]。
+# 2. 再取消下面注释。
+#
+# [[rules]]
+# name = "openai"
+# exit = "ss1"
+# domain_suffix = ["openai.com", "chatgpt.com"]

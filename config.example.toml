@@ -1,0 +1,37 @@
+[network]
+gateway_ip = "10.0.0.1"
+internal_cidr = "172.22.0.0/16"
+ingress_iface = "eth0"
+
+[routing]
+fallback_exit = "direct"
+
+[dns]
+backend_resolvers = ["1.1.1.1:53", "1.0.0.1:53", "8.8.8.8:53", "8.8.4.4:53", "9.9.9.9:53", "22.22.22.22:53"]
+
+[ios]
+enabled = true
+listen = "0.0.0.0:8088"
+base_url = "http://10.0.0.1:8088"
+organization = "5gws"
+profile_identifier = "dev.5gws.dot"
+
+[[exits]]
+name = "direct"
+type = "direct"
+
+# 如需 shadowsocks-rust 出口，取消下面注释并填写真实参数。
+# password 生成示例：openssl rand -base64 16
+# [[exits]]
+# name = "ss1"
+# type = "shadowsocks-rust"
+# server = "198.51.100.10"
+# server_port = 8388
+# method = "2022-blake3-aes-128-gcm"
+# password = "PASTE_OPENSSL_OUTPUT_HERE"
+# username = "default"
+# listen_address = "127.0.0.1"
+# listen_port = 1080
+# tcp = true
+# udp = true
+# timeout_seconds = 300
