@@ -58,7 +58,7 @@ func Generate(cfg config.Config, norm rules.Normalized) ([]OutputFile, error) {
 		files = append(files, OutputFile{"systemd/5gws-cert.service", serviceUnit("5gws iOS certificate server", "/usr/local/bin/5gws cert-server --config "+cfg.System.ConfigDir+"/config.toml --dir "+cfg.System.StateDir+"/ios"), 0o644})
 	}
 	if cfg.Telegram.Enabled {
-		files = append(files, OutputFile{"systemd/5gws-bot.service", serviceUnit("5gws telegram bot", "/usr/local/bin/5gws bot --config "+cfg.System.ConfigDir+"/config.toml"), 0o644})
+		files = append(files, OutputFile{"systemd/5gws-bot.service", serviceUnit("5gws telegram bot", "/usr/local/bin/5gws bot --config "+cfg.System.ConfigDir+"/config.toml --rules "+cfg.System.ConfigDir+"/rules.toml"), 0o644})
 	}
 	return files, nil
 }

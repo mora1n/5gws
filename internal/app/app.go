@@ -115,6 +115,7 @@ func cmdApply(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
 	cfgPath, rulesPath, _ := commonPaths(fs)
 	dryRun := fs.Bool("dry-run", false, "render only")
+	skipBotRestart := fs.Bool("skip-bot-restart", false, "do not restart 5gws-bot.service")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -137,7 +138,7 @@ func cmdApply(args []string, out io.Writer) error {
 	if err := render.WriteAll(outDir, files); err != nil {
 		return err
 	}
-	return runApplyCommands(cfg, out)
+	return runApplyCommands(cfg, out, *skipBotRestart)
 }
 
 func cmdInstall(args []string, stdin io.Reader, out io.Writer) error {
@@ -184,7 +185,7 @@ func cmdInstall(args []string, stdin io.Reader, out io.Writer) error {
 	if err := render.WriteAll(filepath.Join(cfg.System.StateDir, "rendered"), files); err != nil {
 		return err
 	}
-	return runApplyCommands(cfg, out)
+	return runApplyCommands(cfg, out, false)
 }
 
 func cmdInstallSmartDNS(args []string, out io.Writer) error {
@@ -358,6 +359,7 @@ func cmdQUICGW(args []string) error {
 func cmdBot(args []string) error {
 	fs := flag.NewFlagSet("bot", flag.ContinueOnError)
 	cfgPath := fs.String("config", defaultConfigPath, "config.toml path")
+	rulesPath := fs.String("rules", defaultRulesPath, "rules.toml path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -365,7 +367,7 @@ func cmdBot(args []string) error {
 	if err != nil {
 		return err
 	}
-	return telegram.Run(context.Background(), cfg)
+	return telegram.Run(context.Background(), cfg, *cfgPath, *rulesPath)
 }
 
 func commonPaths(fs *flag.FlagSet) (*string, *string, *string) {
@@ -667,7 +669,7 @@ func requireRoot() error {
 	return nil
 }
 
-func runApplyCommands(cfg config.Config, out io.Writer) error {
+func runApplyCommands(cfg config.Config, out io.Writer, skipBotRestart bool) error {
 	rendered := filepath.Join(cfg.System.StateDir, "rendered")
 	if err := os.MkdirAll(cfg.System.RunDir, 0o755); err != nil {
 		return err
@@ -693,6 +695,10 @@ func runApplyCommands(cfg config.Config, out io.Writer) error {
 	for _, svc := range activeServices(cfg) {
 		if err := run(out, "systemctl", "enable", svc); err != nil {
 			return err
+		}
+		if skipBotRestart && svc == "5gws-bot.service" {
+			fmt.Fprintln(out, "skip restart 5gws-bot.service")
+			continue
 		}
 		if err := run(out, "systemctl", "restart", svc); err != nil {
 			return err

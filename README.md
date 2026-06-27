@@ -275,13 +275,27 @@ allowed_users = ["123456789"]
 BOT_TOKEN=...
 ```
 
-生产环境建议填写 `allowed_users`。
+生产环境建议填写 `allowed_users`。为空时 bot 会允许所有 Telegram 用户。
+
+bot 支持命令和按钮菜单：
+
+```text
+/menu    打开菜单
+/status  查看 5gws 服务状态
+/doctor  检查配置、规则和运行依赖
+/ios     输出 CA 证书和 iOS 描述文件链接
+/config  查看配置摘要，隐藏密码
+/rules   查看 rules.toml 摘要，不下载远程 ruleset
+/logs    查看运行日志，默认 60 行
+/apply   应用配置，需要按钮二次确认
+/restart 重启运行服务，需要按钮二次确认
+```
 
 ## 验证
 
 ```sh
 go test ./...
-VERSION=0.1.1
+VERSION=0.1.0
 make release VERSION="$VERSION"
 tar tf "dist/5gws-linux-amd64-${VERSION}.tar.gz"
 ```

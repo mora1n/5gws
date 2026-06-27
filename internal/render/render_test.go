@@ -76,6 +76,7 @@ func TestGenerateRejectsUDPOonlyExitForHAProxy(t *testing.T) {
 func TestGenerateUsesComponentSubdirectories(t *testing.T) {
 	cfg := testConfig()
 	cfg.IOS.Enabled = true
+	cfg.Telegram.Enabled = true
 	files, err := Generate(cfg, rules.Normalized{Rules: []rules.Rule{
 		{Name: "openai", Exit: "ss1", DomainSuffix: []string{"openai.com"}},
 	}})
@@ -96,6 +97,7 @@ func TestGenerateUsesComponentSubdirectories(t *testing.T) {
 		"systemd/5gws-quic.service",
 		"systemd/5gws-ssrust-ss1.service",
 		"systemd/5gws-cert.service",
+		"systemd/5gws-bot.service",
 	} {
 		if _, ok := got[want]; !ok {
 			t.Fatalf("missing generated file %q; got %#v", want, got)
@@ -106,6 +108,9 @@ func TestGenerateUsesComponentSubdirectories(t *testing.T) {
 	}
 	if !strings.Contains(got["systemd/5gws-haproxy.service"], "/rendered/haproxy/haproxy.cfg") {
 		t.Fatalf("haproxy service does not point at component path:\n%s", got["systemd/5gws-haproxy.service"])
+	}
+	if !strings.Contains(got["systemd/5gws-bot.service"], "--rules /etc/5gws/rules.toml") {
+		t.Fatalf("bot service does not pass rules path:\n%s", got["systemd/5gws-bot.service"])
 	}
 }
 
