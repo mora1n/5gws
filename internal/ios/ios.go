@@ -37,20 +37,20 @@ func Generate(dir string, cfg config.Config) (Links, error) {
 	if err != nil {
 		return Links{}, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "5gws-ca.crt"), caCert, 0o644); err != nil {
+	if err := writeFile(filepath.Join(dir, "5gws-ca.crt"), caCert, 0o644); err != nil {
 		return Links{}, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "5gws-ca.key"), caKey, 0o600); err != nil {
+	if err := writeFile(filepath.Join(dir, "5gws-ca.key"), caKey, 0o600); err != nil {
 		return Links{}, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "fullchain.pem"), append(serverCert, caCert...), 0o644); err != nil {
+	if err := writeFile(filepath.Join(dir, "fullchain.pem"), append(serverCert, caCert...), 0o644); err != nil {
 		return Links{}, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "privkey.pem"), serverKey, 0o600); err != nil {
+	if err := writeFile(filepath.Join(dir, "privkey.pem"), serverKey, 0o644); err != nil {
 		return Links{}, err
 	}
 	profile := mobileConfig(cfg)
-	if err := os.WriteFile(filepath.Join(dir, "5gws-dot.mobileconfig"), []byte(profile), 0o644); err != nil {
+	if err := writeFile(filepath.Join(dir, "5gws-dot.mobileconfig"), []byte(profile), 0o644); err != nil {
 		return Links{}, err
 	}
 	links := BuildLinks(cfg)
@@ -71,6 +71,13 @@ func BuildLinks(cfg config.Config) Links {
 		CertQR:     base + "/5gws-ca.png",
 		ProfileQR:  base + "/5gws-dot.png",
 	}
+}
+
+func writeFile(path string, data []byte, mode os.FileMode) error {
+	if err := os.WriteFile(path, data, mode); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
 }
 
 func Serve(dir, listen, internalCIDR string) error {

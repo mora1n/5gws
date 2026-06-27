@@ -140,6 +140,9 @@ func installArchive(spec installSpec, opts Options, out io.Writer) error {
 	if err := run(out, tmp, "curl", "-fL", "-o", spec.Checksum, checksumURL); err != nil {
 		return err
 	}
+	if err := prepareChecksumFile(tmp, spec.Checksum, spec.Asset); err != nil {
+		return err
+	}
 	if err := run(out, tmp, "sha256sum", "-c", spec.Checksum); err != nil {
 		return err
 	}
@@ -215,6 +218,46 @@ func findFile(root, name string) (string, error) {
 		return "", fmt.Errorf("archive did not contain %s", name)
 	}
 	return found, nil
+}
+
+func prepareChecksumFile(dir, checksumFile, asset string) error {
+	path := filepath.Join(dir, checksumFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	line := firstNonEmptyLine(string(data))
+	if line == "" {
+		return fmt.Errorf("%s is empty", checksumFile)
+	}
+	fields := strings.Fields(line)
+	if len(fields) != 1 {
+		return nil
+	}
+	hash := fields[0]
+	if len(hash) != 64 || !isHex(hash) {
+		return nil
+	}
+	return os.WriteFile(path, []byte(hash+"  "+asset+"\n"), 0o600)
+}
+
+func firstNonEmptyLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
+func isHex(value string) bool {
+	for _, r := range value {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
+			return false
+		}
+	}
+	return true
 }
 
 func run(out io.Writer, dir, name string, args ...string) error {

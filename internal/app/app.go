@@ -600,7 +600,10 @@ func runApplyCommands(cfg config.Config, out io.Writer) error {
 		return err
 	}
 	for _, svc := range activeServices(cfg) {
-		if err := run(out, "systemctl", "enable", "--now", svc); err != nil {
+		if err := run(out, "systemctl", "enable", svc); err != nil {
+			return err
+		}
+		if err := run(out, "systemctl", "restart", svc); err != nil {
 			return err
 		}
 	}
