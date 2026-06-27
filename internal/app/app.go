@@ -33,6 +33,9 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return nil
 	}
 	switch args[0] {
+	case "-h", "--help", "help":
+		usage(stdout)
+		return nil
 	case "render":
 		return cmdRender(args[1:], stdout)
 	case "apply":
@@ -58,12 +61,33 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	case "bot":
 		return cmdBot(args[1:])
 	default:
-		return fmt.Errorf("unknown command %q", args[0])
+		return fmt.Errorf("unknown command %q\nRun '5gws --help' for usage.", args[0])
 	}
 }
 
 func usage(w io.Writer) {
-	fmt.Fprintln(w, "usage: 5gws <render|apply|install|install-smartdns|install-ssrust|uninstall|doctor|status|ios-link|cert-server|quicgw|bot>")
+	fmt.Fprint(w, `Usage: 5gws <command> [flags]
+
+Main:
+  install           guided install and enable services
+  apply             render config and restart services
+  doctor            validate config and runtime deps
+  status            show service status
+  uninstall         remove 5gws services and state
+
+Client:
+  ios-link          generate iOS cert/profile links and QR codes
+
+Tools:
+  render            render files for inspection
+  install-smartdns  install smartdns-rs explicitly
+  install-ssrust    install shadowsocks-rust explicitly
+
+Runtime/debug:
+  cert-server       serve iOS files; usually managed by apply
+  quicgw            UDP/443 QUIC gateway; usually managed by apply
+  bot               Telegram bot; usually managed by apply
+`)
 }
 
 func cmdRender(args []string, out io.Writer) error {
@@ -265,6 +289,7 @@ func cmdIOSLink(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("ios-link", flag.ContinueOnError)
 	cfgPath := fs.String("config", defaultConfigPath, "config.toml path")
 	outDir := fs.String("out", "", "output directory")
+	noQR := fs.Bool("no-qr", false, "print links only")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -281,6 +306,21 @@ func cmdIOSLink(args []string, out io.Writer) error {
 		return err
 	}
 	fmt.Fprintf(out, "cert: %s\nprofile: %s\ncert_qr: %s\nprofile_qr: %s\n", links.CertURL, links.ProfileURL, links.CertQR, links.ProfileQR)
+	if *noQR {
+		return nil
+	}
+	if err := printTerminalQR(out, "CA certificate QR", links.CertURL); err != nil {
+		return err
+	}
+	return printTerminalQR(out, "iOS profile QR", links.ProfileURL)
+}
+
+func printTerminalQR(out io.Writer, label, value string) error {
+	qr, err := ios.TerminalQRCode(value)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "\n%s:\n%s", label, qr)
 	return nil
 }
 
@@ -388,16 +428,30 @@ func wizardWithDefaults(stdin io.Reader, out io.Writer, assumeYes bool, defaults
 	gateway := prompt(reader, out, "gateway IP", defaults.GatewayIP, assumeYes)
 	cidr := prompt(reader, out, "carrier internal CIDR", defaults.InternalCIDR, assumeYes)
 	iface := prompt(reader, out, "ingress interface", defaults.IngressIface, assumeYes)
+	apple := promptBool(reader, out, "enable Apple/iOS profile flow", true, assumeYes)
+	iosConfig := `[ios]
+enabled = false
+`
+	if apple {
+		iosConfig = fmt.Sprintf(`[ios]
+enabled = true
+listen = "0.0.0.0:8088"
+base_url = "http://%s:8088"
+organization = "5gws"
+profile_identifier = "dev.5gws.dot"
+`, gateway)
+	}
 	configText := fmt.Sprintf(`[network]
 gateway_ip = %q
 internal_cidr = %q
 ingress_iface = %q
 
+%s
 [[exits]]
 name = "direct"
 type = "direct"
 fwmark = 0
-`, gateway, cidr, iface)
+`, gateway, cidr, iface, iosConfig)
 	return configText, defaultRulesText()
 }
 
@@ -469,6 +523,43 @@ func prompt(reader *bufio.Reader, out io.Writer, label, fallback string, assumeY
 		return fallback
 	}
 	return value
+}
+
+func promptBool(reader *bufio.Reader, out io.Writer, label string, fallback, assumeYes bool) bool {
+	fallbackText := "n"
+	if fallback {
+		fallbackText = "Y"
+	}
+	if assumeYes {
+		fmt.Fprintf(out, "%s: %s\n", label, yesNo(fallback))
+		return fallback
+	}
+	for {
+		fmt.Fprintf(out, "%s [%s]: ", label, fallbackText)
+		line, err := reader.ReadString('\n')
+		value := strings.ToLower(strings.TrimSpace(line))
+		if value == "" {
+			return fallback
+		}
+		switch value {
+		case "y", "yes", "true", "1":
+			return true
+		case "n", "no", "false", "0":
+			return false
+		default:
+			if err != nil {
+				return fallback
+			}
+			fmt.Fprintln(out, "please answer y or n")
+		}
+	}
+}
+
+func yesNo(value bool) string {
+	if value {
+		return "yes"
+	}
+	return "no"
 }
 
 func parseGeneratedOrExisting(cfgPath, rulesPath, cfgText, rulesText string) (config.Config, rules.Normalized, error) {

@@ -73,6 +73,14 @@ func BuildLinks(cfg config.Config) Links {
 	}
 }
 
+func TerminalQRCode(value string) (string, error) {
+	code, err := qrcode.New(value, qrcode.Medium)
+	if err != nil {
+		return "", err
+	}
+	return code.ToSmallString(false), nil
+}
+
 func writeFile(path string, data []byte, mode os.FileMode) error {
 	if err := os.WriteFile(path, data, mode); err != nil {
 		return err

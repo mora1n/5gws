@@ -23,6 +23,13 @@ nftables 只 redirect 同时匹配 `network.ingress_iface` 和 `network.internal
 
 ## 安装
 
+可选：如果 Android 私人 DNS 或公网 DoT 要使用域名，先在 DNS 服务商添加一条 A 记录：
+
+- 子域示例：`dot.example.com`。
+- A 记录指向 VPS 公网 IP。
+- Cloudflare 使用“仅 DNS / 灰云”，不要开启橙云代理。
+- 等 `dig +short dot.example.com` 返回 VPS IP 后继续。
+
 一键安装并进入引导(需要root权限)：
 
 ```sh
@@ -32,13 +39,13 @@ wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo b
 固定版本：
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash -s -- --version 0.1.0
+wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash -s -- --version 0.1.1
 ```
 
 手动安装：
 
 ```sh
-tar xf 5gws-linux-amd64-0.1.0.tar.gz
+tar xf 5gws-linux-amd64-0.1.1.tar.gz
 sudo install -m 755 5gws /usr/local/bin/5gws
 sudo 5gws install
 sudo 5gws doctor
@@ -50,6 +57,7 @@ sudo 5gws apply
 - `gateway IP`：默认读取入口网卡 IPv4，失败时为 `10.0.0.1`。
 - `carrier internal CIDR`：默认 `172.22.0.0/16`。
 - `ingress interface`：默认来自 `ip route show default`。
+- `enable Apple/iOS profile flow`：默认启用，自动生成 iOS 证书和描述文件下载服务。
 
 显式安装运行时：
 
@@ -70,6 +78,8 @@ sudo 5gws uninstall --purge --yes
 5gws render --config ./config.example.toml --rules ./rules.example.toml --out ./rendered
 5gws doctor --config ./config.example.toml --rules ./rules.example.toml
 ```
+
+`cert-server`、`quicgw`、`bot` 主要用于调试；正常部署由 `5gws apply` 按配置自动生成 systemd 服务并启动。
 
 ## config.toml
 
@@ -209,7 +219,7 @@ exit = "direct"
 启用 `[ios]` 后生成证书、描述文件和二维码：
 
 ```sh
-5gws ios-link --config /etc/5gws/config.toml
+sudo 5gws ios-link --config /etc/5gws/config.toml
 ```
 
 命令会输出：
@@ -219,6 +229,12 @@ exit = "direct"
 - `cert_qr`：CA 证书二维码。
 - `profile_qr`：DoT 描述文件二维码。
 
+终端会直接显示 CA 证书和描述文件二维码，方便调试时扫码。脚本或 Telegram 场景可使用 `--no-qr` 只输出链接：
+
+```sh
+sudo 5gws ios-link --config /etc/5gws/config.toml --no-qr
+```
+
 安装步骤：
 
 1. iPhone / iPad 连接运营商内网。
@@ -227,7 +243,7 @@ exit = "direct"
 4. 扫描 `profile_qr` 或用 Safari 打开 `profile`，安装 DoT 描述文件。
 5. 进入 `设置 -> 通用 -> VPN 与设备管理`，确认 `5gws DoT` 描述文件已安装。
 
-`ios.base_url` 必须是手机能访问到的地址；内置证书服务只允许 loopback 和 `network.internal_cidr` 来源访问。
+`ios.base_url` 必须是手机能访问到的地址；内置证书服务只允许 loopback 和 `network.internal_cidr` 来源访问。正常安装后证书服务由 `5gws apply` 自动管理，不需要手动运行 `cert-server`。
 
 ### Android
 
@@ -265,8 +281,9 @@ BOT_TOKEN=...
 
 ```sh
 go test ./...
-make release VERSION=0.1.0
-tar tf dist/5gws-linux-amd64-${VERSION}.tar.gz
+VERSION=0.1.1
+make release VERSION="$VERSION"
+tar tf "dist/5gws-linux-amd64-${VERSION}.tar.gz"
 ```
 
 tar 包应只包含 `5gws`、`config.example.toml`、`rules.example.toml`。

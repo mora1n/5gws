@@ -128,6 +128,10 @@ func (b Bot) send(chatID int64, text string) error {
 }
 
 func handle(text string) string {
+	return handleWithRunner(text, runCLI)
+}
+
+func handleWithRunner(text string, runner func(...string) string) string {
 	fields := strings.Fields(text)
 	if len(fields) == 0 {
 		return "empty command; send /help"
@@ -136,11 +140,11 @@ func handle(text string) string {
 	case "/start", "/help":
 		return "/status\n/doctor\n/ios"
 	case "/status":
-		return runCLI("status")
+		return runner("status")
 	case "/doctor":
-		return runCLI("doctor")
+		return runner("doctor")
 	case "/ios":
-		return runCLI("ios-link")
+		return runner("ios-link", "--no-qr")
 	default:
 		return "unknown command; send /help"
 	}
