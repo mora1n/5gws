@@ -2,7 +2,6 @@ package app
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -17,13 +16,13 @@ import (
 )
 
 func cmdLogs(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
-	cfgPath := fs.String("config", defaultConfigPath, "config.toml path")
-	component := fs.String("component", "all", "all|smartdns|haproxy|quic|cert|bot|ssrust")
-	since := fs.String("since", "1h", "duration like 10m/1h or journalctl --since value")
-	lines := fs.Int("lines", 200, "number of lines")
-	follow := fs.Bool("follow", false, "follow logs")
-	if err := fs.Parse(args); err != nil {
+	fs := newCommandFlags("logs")
+	cfgPath := fs.String("config", "c", defaultConfigPath, "config.toml path")
+	component := fs.String("component", "m", "all", "all|smartdns|haproxy|quic|cert|bot|ssrust")
+	since := fs.String("since", "s", "1h", "duration like 10m/1h or journalctl --since value")
+	lines := fs.Int("lines", "n", 200, "number of lines")
+	follow := fs.Bool("follow", "f", false, "follow logs")
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	cfg, err := config.Load(*cfgPath)
@@ -93,12 +92,12 @@ func logServices(cfg config.Config, component string) ([]string, error) {
 }
 
 func cmdDetectCIDR(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("detect-cidr", flag.ContinueOnError)
-	cfgPath := fs.String("config", defaultConfigPath, "config.toml path")
-	iface := fs.String("iface", "", "interface to observe")
-	seconds := fs.Int("seconds", 30, "capture duration")
-	count := fs.Int("count", 80, "maximum packets")
-	if err := fs.Parse(args); err != nil {
+	fs := newCommandFlags("detect-cidr")
+	cfgPath := fs.String("config", "c", defaultConfigPath, "config.toml path")
+	iface := fs.String("iface", "i", "", "interface to observe")
+	seconds := fs.Int("seconds", "s", 30, "capture duration")
+	count := fs.Int("count", "n", 80, "maximum packets")
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	if *seconds <= 0 {

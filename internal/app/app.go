@@ -98,9 +98,9 @@ Runtime/debug:
 }
 
 func cmdRender(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("render", flag.ContinueOnError)
+	fs := newCommandFlags("render")
 	cfgPath, rulesPath, outDir := commonPaths(fs)
-	if err := fs.Parse(args); err != nil {
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	cfg, norm, err := loadAll(*cfgPath, *rulesPath)
@@ -119,11 +119,11 @@ func cmdRender(args []string, out io.Writer) error {
 }
 
 func cmdApply(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	fs := newCommandFlags("apply")
 	cfgPath, rulesPath, _ := commonPaths(fs)
-	dryRun := fs.Bool("dry-run", false, "render only")
-	skipBotRestart := fs.Bool("skip-bot-restart", false, "do not restart 5gws-bot.service")
-	if err := fs.Parse(args); err != nil {
+	dryRun := fs.Bool("dry-run", "n", false, "render only")
+	skipBotRestart := fs.Bool("skip-bot-restart", "", false, "do not restart 5gws-bot.service")
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	cfg, norm, err := loadAll(*cfgPath, *rulesPath)
@@ -149,12 +149,12 @@ func cmdApply(args []string, out io.Writer) error {
 }
 
 func cmdInstall(args []string, stdin io.Reader, out io.Writer) error {
-	fs := flag.NewFlagSet("install", flag.ContinueOnError)
+	fs := newCommandFlags("install")
 	cfgPath, rulesPath, _ := commonPaths(fs)
-	assumeYes := fs.Bool("assume-yes", false, "skip confirmation")
-	dryRun := fs.Bool("dry-run", false, "show actions without writing system state")
-	reconfigure := fs.Bool("reconfigure", false, "rerun guided config and overwrite generated inputs")
-	if err := fs.Parse(args); err != nil {
+	assumeYes := fs.Bool("assume-yes", "y", false, "skip confirmation")
+	dryRun := fs.Bool("dry-run", "n", false, "show actions without writing system state")
+	reconfigure := fs.Bool("reconfigure", "R", false, "rerun guided config and overwrite generated inputs")
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	reader := bufio.NewReader(stdin)
@@ -208,33 +208,33 @@ func cmdInstall(args []string, stdin io.Reader, out io.Writer) error {
 }
 
 func cmdInstallSmartDNS(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("install-smartdns", flag.ContinueOnError)
-	dryRun := fs.Bool("dry-run", false, "show actions without installing")
-	yes := fs.Bool("yes", false, "install without confirmation")
-	version := fs.String("version", installer.DefaultSmartDNSVersion, "smartdns-rs version")
-	if err := fs.Parse(args); err != nil {
+	fs := newCommandFlags("install-smartdns")
+	dryRun := fs.Bool("dry-run", "n", false, "show actions without installing")
+	yes := fs.Bool("yes", "y", false, "install without confirmation")
+	version := fs.String("version", "v", installer.DefaultSmartDNSVersion, "smartdns-rs version")
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	return installer.InstallSmartDNS(installer.Options{DryRun: *dryRun, Yes: *yes, Version: *version}, out)
 }
 
 func cmdInstallSSRust(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("install-ssrust", flag.ContinueOnError)
-	dryRun := fs.Bool("dry-run", false, "show actions without installing")
-	yes := fs.Bool("yes", false, "install without confirmation")
-	version := fs.String("version", installer.DefaultSSRustVersion, "shadowsocks-rust version")
-	if err := fs.Parse(args); err != nil {
+	fs := newCommandFlags("install-ssrust")
+	dryRun := fs.Bool("dry-run", "n", false, "show actions without installing")
+	yes := fs.Bool("yes", "y", false, "install without confirmation")
+	version := fs.String("version", "v", installer.DefaultSSRustVersion, "shadowsocks-rust version")
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	return installer.InstallSSRust(installer.Options{DryRun: *dryRun, Yes: *yes, Version: *version}, out)
 }
 
 func cmdUninstall(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
-	purge := fs.Bool("purge", false, "remove config and state")
-	yes := fs.Bool("yes", false, "confirm destructive uninstall")
-	dryRun := fs.Bool("dry-run", false, "show actions without changing system state")
-	if err := fs.Parse(args); err != nil {
+	fs := newCommandFlags("uninstall")
+	purge := fs.Bool("purge", "p", false, "remove config and state")
+	yes := fs.Bool("yes", "y", false, "confirm destructive uninstall")
+	dryRun := fs.Bool("dry-run", "n", false, "show actions without changing system state")
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	if !*yes && !*dryRun {
@@ -254,9 +254,9 @@ func cmdUninstall(args []string, out io.Writer) error {
 }
 
 func cmdDoctor(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs := newCommandFlags("doctor")
 	cfgPath, rulesPath, _ := commonPaths(fs)
-	if err := fs.Parse(args); err != nil {
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	cfg, norm, err := loadAll(*cfgPath, *rulesPath)
@@ -307,11 +307,11 @@ func cmdStatus(out io.Writer) error {
 }
 
 func cmdIOSLink(args []string, out io.Writer) error {
-	fs := flag.NewFlagSet("ios-link", flag.ContinueOnError)
-	cfgPath := fs.String("config", defaultConfigPath, "config.toml path")
-	outDir := fs.String("out", "", "output directory")
-	noQR := fs.Bool("no-qr", false, "print links only")
-	if err := fs.Parse(args); err != nil {
+	fs := newCommandFlags("ios-link")
+	cfgPath := fs.String("config", "c", defaultConfigPath, "config.toml path")
+	outDir := fs.String("out", "o", "", "output directory")
+	noQR := fs.Bool("no-qr", "q", false, "print links only")
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	cfg, err := config.Load(*cfgPath)
@@ -343,10 +343,10 @@ func printTerminalQR(out io.Writer, label, value string) error {
 }
 
 func cmdCertServer(args []string) error {
-	fs := flag.NewFlagSet("cert-server", flag.ContinueOnError)
-	cfgPath := fs.String("config", defaultConfigPath, "config.toml path")
-	dir := fs.String("dir", "", "directory to serve")
-	if err := fs.Parse(args); err != nil {
+	fs := newCommandFlags("cert-server")
+	cfgPath := fs.String("config", "c", defaultConfigPath, "config.toml path")
+	dir := fs.String("dir", "d", "", "directory to serve")
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	cfg, err := config.Load(*cfgPath)
@@ -361,9 +361,9 @@ func cmdCertServer(args []string) error {
 }
 
 func cmdQUICGW(args []string) error {
-	fs := flag.NewFlagSet("quicgw", flag.ContinueOnError)
+	fs := newCommandFlags("quicgw")
 	cfgPath, rulesPath, _ := commonPaths(fs)
-	if err := fs.Parse(args); err != nil {
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	cfg, norm, err := loadAll(*cfgPath, *rulesPath)
@@ -374,10 +374,10 @@ func cmdQUICGW(args []string) error {
 }
 
 func cmdBot(args []string) error {
-	fs := flag.NewFlagSet("bot", flag.ContinueOnError)
-	cfgPath := fs.String("config", defaultConfigPath, "config.toml path")
-	rulesPath := fs.String("rules", defaultRulesPath, "rules.toml path")
-	if err := fs.Parse(args); err != nil {
+	fs := newCommandFlags("bot")
+	cfgPath := fs.String("config", "c", defaultConfigPath, "config.toml path")
+	rulesPath := fs.String("rules", "r", defaultRulesPath, "rules.toml path")
+	if err := fs.parse(args); err != nil {
 		return err
 	}
 	cfg, err := config.Load(*cfgPath)
@@ -387,11 +387,79 @@ func cmdBot(args []string) error {
 	return telegram.Run(context.Background(), cfg, *cfgPath, *rulesPath)
 }
 
-func commonPaths(fs *flag.FlagSet) (*string, *string, *string) {
-	cfg := fs.String("config", defaultConfigPath, "config.toml path")
-	rules := fs.String("rules", defaultRulesPath, "rules.toml path")
-	out := fs.String("out", "./rendered", "render output directory")
+func commonPaths(fs *commandFlags) (*string, *string, *string) {
+	cfg := fs.String("config", "c", defaultConfigPath, "config.toml path")
+	rules := fs.String("rules", "r", defaultRulesPath, "rules.toml path")
+	out := fs.String("out", "o", "./rendered", "render output directory")
 	return cfg, rules, out
+}
+
+type commandFlags struct {
+	*flag.FlagSet
+	aliases map[string]string
+}
+
+func newCommandFlags(name string) *commandFlags {
+	return &commandFlags{
+		FlagSet: flag.NewFlagSet(name, flag.ContinueOnError),
+		aliases: map[string]string{},
+	}
+}
+
+func (f *commandFlags) String(name, short, value, usage string) *string {
+	out := f.FlagSet.String(name, value, usage)
+	if short != "" {
+		f.FlagSet.StringVar(out, short, value, usage)
+		f.aliases[name] = short
+	}
+	return out
+}
+
+func (f *commandFlags) Bool(name, short string, value bool, usage string) *bool {
+	out := f.FlagSet.Bool(name, value, usage)
+	if short != "" {
+		f.FlagSet.BoolVar(out, short, value, usage)
+		f.aliases[name] = short
+	}
+	return out
+}
+
+func (f *commandFlags) Int(name, short string, value int, usage string) *int {
+	out := f.FlagSet.Int(name, value, usage)
+	if short != "" {
+		f.FlagSet.IntVar(out, short, value, usage)
+		f.aliases[name] = short
+	}
+	return out
+}
+
+func (f *commandFlags) parse(args []string) error {
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		name, ok := singleDashLongName(arg)
+		if !ok || f.Lookup(name) == nil {
+			continue
+		}
+		msg := fmt.Sprintf("long flag -%s must use --%s", name, name)
+		if short := f.aliases[name]; short != "" {
+			msg += fmt.Sprintf(" or -%s", short)
+		}
+		return errors.New(msg)
+	}
+	return f.FlagSet.Parse(args)
+}
+
+func singleDashLongName(arg string) (string, bool) {
+	if !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") || arg == "-" {
+		return "", false
+	}
+	name := strings.TrimPrefix(arg, "-")
+	if i := strings.IndexByte(name, '='); i >= 0 {
+		name = name[:i]
+	}
+	return name, len(name) > 1
 }
 
 func loadAll(cfgPath, rulesPath string) (config.Config, rules.Normalized, error) {

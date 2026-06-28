@@ -38,6 +38,59 @@ func TestUnknownCommandSuggestsHelp(t *testing.T) {
 	}
 }
 
+func TestCommandFlagsAcceptShortAliasesAndDoubleDashLongFlags(t *testing.T) {
+	fs := newCommandFlags("logs")
+	fs.SetOutput(&bytes.Buffer{})
+	component := fs.String("component", "m", "all", "")
+	lines := fs.Int("lines", "n", 200, "")
+	follow := fs.Bool("follow", "f", false, "")
+	if err := fs.parse([]string{"--follow", "-m", "haproxy", "-n", "20"}); err != nil {
+		t.Fatal(err)
+	}
+	if !*follow || *component != "haproxy" || *lines != 20 {
+		t.Fatalf("parsed flags = follow:%t component:%q lines:%d", *follow, *component, *lines)
+	}
+}
+
+func TestCommandFlagsRejectSingleDashLongFlags(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "with alias", args: []string{"-follow"}, want: "long flag -follow must use --follow or -f"},
+		{name: "with alias and value", args: []string{"-config=/tmp/config.toml"}, want: "long flag -config must use --config or -c"},
+		{name: "without alias", args: []string{"-skip-bot-restart"}, want: "long flag -skip-bot-restart must use --skip-bot-restart"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newCommandFlags("apply")
+			fs.SetOutput(&bytes.Buffer{})
+			fs.String("config", "c", defaultConfigPath, "")
+			fs.Bool("follow", "f", false, "")
+			fs.Bool("skip-bot-restart", "", false, "")
+			err := fs.parse(tc.args)
+			if err == nil {
+				t.Fatal("expected single-dash long flag error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %q, want %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+func TestLogsRejectsSingleDashFollowBeforeLoadingConfig(t *testing.T) {
+	var out bytes.Buffer
+	err := cmdLogs([]string{"-follow"}, &out)
+	if err == nil {
+		t.Fatal("expected -follow to fail")
+	}
+	if !strings.Contains(err.Error(), "long flag -follow must use --follow or -f") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestWizardUsesDetectedDefaults(t *testing.T) {
 	var out bytes.Buffer
 	cfgText, _ := wizardWithDefaults(bufio.NewReader(strings.NewReader("")), &out, true, wizardDefaults{
