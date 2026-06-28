@@ -38,20 +38,42 @@ type packetConn interface {
 }
 
 func Run(ctx context.Context, cfg config.Config, norm rules.Normalized) error {
+	gw, err := listenQUICGateway(cfg, norm)
+	if err != nil {
+		return err
+	}
+	defer gw.listener.Close()
+	proxies, err := listenUDPProxies(cfg)
+	if err != nil {
+		return err
+	}
+	defer closeUDPProxies(proxies)
+	errCh := make(chan error, 1+len(proxies))
+	go gw.gc(ctx)
+	go func() {
+		errCh <- gw.serve(ctx)
+	}()
+	for _, proxy := range proxies {
+		go proxy.gc(ctx)
+		go func(proxy *UDPProxy) {
+			errCh <- proxy.serve(ctx)
+		}(proxy)
+	}
+	return <-errCh
+}
+
+func listenQUICGateway(cfg config.Config, norm rules.Normalized) (*Gateway, error) {
 	addr := net.JoinHostPort("0.0.0.0", strconv.Itoa(cfg.Network.QUICRedirectPort))
 	udpAddr, err := net.ResolveUDPAddr("udp4", addr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	conn, err := net.ListenUDP("udp4", udpAddr)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer conn.Close()
 	log.Printf("quic gateway listening on %s rules=%d fallback_exit=%s", conn.LocalAddr(), len(norm.GatewayRules()), cfg.Routing.FallbackExit)
-	gw := &Gateway{cfg: cfg, rules: norm, listener: conn, sessions: map[string]*session{}}
-	go gw.gc(ctx)
-	return gw.serve(ctx)
+	return &Gateway{cfg: cfg, rules: norm, listener: conn, sessions: map[string]*session{}}, nil
 }
 
 func (g *Gateway) serve(ctx context.Context) error {
@@ -111,7 +133,7 @@ func (g *Gateway) newSession(data []byte, addr *net.UDPAddr) {
 		log.Printf("quic %s sni=%q rejected: exit %q has udp=false", addr, sni, exit.Name)
 		return
 	}
-	backend, target, err := connectBackend(sni, exit)
+	backend, target, err := connectBackend(sni, 443, exit)
 	if err != nil {
 		log.Printf("quic %s sni=%q exit=%q rejected: %v", addr, sni, exit.Name, err)
 		return
@@ -153,27 +175,27 @@ func selectExit(cfg config.Config, norm rules.Normalized, sni string) (config.Ex
 	return exit, false, nil
 }
 
-func connectBackend(host string, exit config.ExitConfig) (packetConn, string, error) {
+func connectBackend(host string, port int, exit config.ExitConfig) (packetConn, string, error) {
 	switch exit.Type {
 	case "direct":
-		return resolveDirectUDP(host, exit.FWMark)
+		return resolveDirectUDP(host, port, exit.FWMark)
 	case "shadowsocks-rust":
 		proxyAddr := net.JoinHostPort(exit.ListenAddress, strconv.Itoa(exit.ListenPort))
-		conn, err := dialSocksUDP(proxyAddr, host, 443)
-		return conn, proxyAddr + " -> " + net.JoinHostPort(host, "443"), err
+		conn, err := dialSocksUDP(proxyAddr, host, port)
+		return conn, proxyAddr + " -> " + net.JoinHostPort(host, strconv.Itoa(port)), err
 	default:
 		return nil, "", fmt.Errorf("unsupported exit type %q", exit.Type)
 	}
 }
 
-func resolveDirectUDP(host string, mark int) (*net.UDPConn, string, error) {
+func resolveDirectUDP(host string, port int, mark int) (*net.UDPConn, string, error) {
 	ips, err := net.LookupIP(host)
 	if err != nil {
 		return nil, "", err
 	}
 	for _, ip := range ips {
 		if ip4 := ip.To4(); ip4 != nil {
-			target := &net.UDPAddr{IP: ip4, Port: 443}
+			target := &net.UDPAddr{IP: ip4, Port: port}
 			conn, err := net.DialUDP("udp", nil, target)
 			if err != nil {
 				return nil, "", err

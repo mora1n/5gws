@@ -101,6 +101,18 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	if !cfg.Logging.AccessEnabled() {
 		t.Fatal("logging access should default to true")
 	}
+	wantUDPProxies := []UDPProxyConfig{
+		{Name: "stun-3478", ClientPort: 3478, ListenPort: 13478, Target: "stun.cloudflare.com:3478", Exit: "direct"},
+		{Name: "stun-19302", ClientPort: 19302, ListenPort: 13902, Target: "stun.l.google.com:19302", Exit: "direct"},
+	}
+	if len(cfg.UDPProxies) != len(wantUDPProxies) {
+		t.Fatalf("udp proxy count = %d, want %d", len(cfg.UDPProxies), len(wantUDPProxies))
+	}
+	for i := range wantUDPProxies {
+		if cfg.UDPProxies[i] != wantUDPProxies[i] {
+			t.Fatalf("udp proxy %d = %#v, want %#v", i, cfg.UDPProxies[i], wantUDPProxies[i])
+		}
+	}
 }
 
 func TestValidateRejectsInvalidLoggingLevel(t *testing.T) {
@@ -202,6 +214,25 @@ func TestValidateRejectsTCPDisabledFallbackExit(t *testing.T) {
 	cfg.Routing.FallbackExit = exit.Name
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected tcp-disabled fallback exit to be rejected")
+	}
+}
+
+func TestValidateRejectsUDPProxyWithUDPDisabledExit(t *testing.T) {
+	cfg := validConfig()
+	tcp, udp := true, false
+	exit := validSSExit()
+	exit.TCP = &tcp
+	exit.UDP = &udp
+	cfg.Exits = append(cfg.Exits, exit)
+	cfg.UDPProxies = []UDPProxyConfig{{
+		Name:       "stun-test",
+		ClientPort: 3478,
+		ListenPort: 13478,
+		Target:     "stun.example.com:3478",
+		Exit:       exit.Name,
+	}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected udp-disabled exit to be rejected for udp proxy")
 	}
 }
 

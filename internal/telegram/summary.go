@@ -21,6 +21,9 @@ func (h handler) configSummary() string {
 	fmt.Fprintf(&b, "config: %s\nrules: %s\n", h.configPath, h.rulesPath)
 	fmt.Fprintf(&b, "network: gateway=%s internal=%s iface=%s\n", cfg.Network.GatewayIP, cfg.Network.InternalCIDR, cfg.Network.IngressIface)
 	fmt.Fprintf(&b, "redirect: tcp/80->%d tcp/443->%d udp/443->%d\n", cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort, cfg.Network.QUICRedirectPort)
+	for _, proxy := range cfg.UDPProxies {
+		fmt.Fprintf(&b, "udp_proxy: udp/%d->%d target=%s exit=%s\n", proxy.ClientPort, proxy.ListenPort, proxy.Target, proxy.Exit)
+	}
 	fmt.Fprintf(&b, "routing: fallback_exit=%s\n", cfg.Routing.FallbackExit)
 	fmt.Fprintf(&b, "dns: binary=%s domain=%s udp=%s tcp=%s dot=%s public_dot=%s\n", cfg.DNS.Binary, cfg.DNS.DOTDomain, cfg.DNS.ListenUDP, cfg.DNS.ListenTCP, cfg.DNS.ListenDOT, cfg.DNS.ListenPublicDOT)
 	fmt.Fprintf(&b, "dns pools: cn=%d overseas_private=%d overseas_public=%d\n", len(cfg.DNS.UpstreamsCN), len(cfg.DNS.UpstreamsOverseasPrivate), len(cfg.DNS.UpstreamsOverseasPublic))

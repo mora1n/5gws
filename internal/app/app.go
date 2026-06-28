@@ -92,7 +92,7 @@ Tools:
 
 Runtime/debug:
   cert-server       serve iOS files; usually managed by apply
-  quicgw            UDP/443 QUIC gateway; usually managed by apply
+  quicgw            UDP/443 QUIC and STUN proxy; usually managed by apply
   bot               Telegram bot; usually managed by apply
 `)
 }
@@ -615,6 +615,7 @@ func encodeConfig(cfg config.Config) (string, error) {
 		}
 		writeStringSlice(&b, "allowed_users", cfg.Telegram.AllowedUsers, nil)
 	}
+	writeUDPProxies(&b, cfg.UDPProxies)
 	for _, exit := range cfg.Exits {
 		writeExitConfig(&b, exit)
 	}
@@ -649,6 +650,28 @@ func writeStringSlice(b *strings.Builder, name string, values, defaultValues []s
 }
 
 func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func writeUDPProxies(b *strings.Builder, proxies []config.UDPProxyConfig) {
+	if sameUDPProxies(proxies, config.DefaultUDPProxies()) {
+		return
+	}
+	for _, proxy := range proxies {
+		fmt.Fprintf(b, "\n[[udp_proxies]]\nname = %q\nclient_port = %d\nlisten_port = %d\ntarget = %q\nexit = %q\n",
+			proxy.Name, proxy.ClientPort, proxy.ListenPort, proxy.Target, proxy.Exit)
+	}
+}
+
+func sameUDPProxies(a, b []config.UDPProxyConfig) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -832,7 +855,27 @@ func fileExists(path string) bool {
 }
 
 func defaultRulesText() string {
-	return `[[imports]]
+	return `[[rules]]
+name = "ip-check"
+exit = "direct"
+domain_suffix = [
+  "icanhazip.com",
+  "ipinfo.io",
+  "ippure.com",
+]
+
+[[rules]]
+name = "ippure-stun"
+exit = "direct"
+domain = [
+  "stun.chat.bilibili.com",
+  "stun.cloudflare.com",
+  "stun.hitv.com",
+  "stun.l.google.com",
+  "stun.miwifi.com",
+]
+
+[[imports]]
 name = "cn"
 type = "sing-box"
 url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.json"
@@ -842,6 +885,18 @@ dns_pool = "cn"
 name = "gfw"
 type = "sing-box"
 url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/gfw.json"
+exit = "direct"
+
+[[imports]]
+name = "ip-geo-detect"
+type = "sing-box"
+url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-ip-geo-detect.json"
+exit = "direct"
+
+[[imports]]
+name = "stun"
+type = "sing-box"
+url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-stun.json"
 exit = "direct"
 `
 }
@@ -889,6 +944,9 @@ func printInstallSummary(w io.Writer, cfg config.Config, norm rules.Normalized) 
 	fmt.Fprintf(w, "internal_cidr: %s via %s\n", cfg.Network.InternalCIDR, cfg.Network.IngressIface)
 	fmt.Fprintf(w, "dot_domain: %s\n", cfg.DNS.DOTDomain)
 	fmt.Fprintf(w, "redirect: tcp/80->%d tcp/443->%d udp/443->%d\n", cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort, cfg.Network.QUICRedirectPort)
+	for _, proxy := range cfg.UDPProxies {
+		fmt.Fprintf(w, "udp_proxy: udp/%d->%d target=%s exit=%s\n", proxy.ClientPort, proxy.ListenPort, proxy.Target, proxy.Exit)
+	}
 	fmt.Fprintf(w, "rules: %d\n", len(norm.Rules))
 }
 

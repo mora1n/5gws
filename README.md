@@ -2,7 +2,7 @@
 
 面向运营商固定内网源 IP 场景的轻量 DNS/域名分流网关。
 
-客户端只配置系统 DNS/DoT，不安装代理客户端；服务端按域名规则和来源网段完成 DNS 分流，并接管内网来源的 DNS、TCP/80、TCP/443、UDP/443。
+客户端只配置系统 DNS/DoT，不安装代理客户端；服务端按域名规则和来源网段完成 DNS 分流，并接管内网来源的 DNS、TCP/80、TCP/443、UDP/443 和常见 STUN UDP 端口。
 
 release 包保持精简，只包含：
 
@@ -31,7 +31,7 @@ release 包保持精简，只包含：
 |---|---|---|
 | smartdns-rs | DNS/DoT 入口和上游分组 | 国内 DNS pool 竞速；按来源区分 `overseas_private` / `overseas_public` |
 | HAProxy | TCP/80、TCP/443 透明转发 | 读取 Host/SNI，不解密 TLS，按规则选择出口 |
-| quicgw | UDP/443 QUIC/HTTP3 转发 | 解析 QUIC Initial 中的 SNI，补齐 HTTP/3 |
+| quicgw | UDP/443 QUIC/HTTP3 与 STUN UDP 转发 | QUIC 解析 Initial SNI；STUN 端口走固定 UDP proxy |
 | nftables | 内网来源重定向和后端端口保护 | 只 redirect `network.ingress_iface` + `network.internal_cidr` 命中的流量 |
 | shadowsocks-rust | 可选出口 | 首次选择该出口且未安装时可自动安装，也可显式安装 |
 | certbot | DoT 公开证书 | `5gws install` 自动签发并部署到默认路径 |
@@ -45,9 +45,10 @@ release 包保持精简，只包含：
 - 内网来源未命中：走 `overseas_private` DNS pool。
 - 非内网来源 DoT：走 `overseas_public` DNS pool，不返回网关 IP。
 - TCP/QUIC 有 Host/SNI 但未命中规则：走 `routing.fallback_exit`。
+- STUN 域名默认返回 `gateway_ip`，常见 `3478/19302` 端口由 UDP proxy 从服务端出口发起。
 - 缺 Host/SNI：拒绝，不做静默兜底。
 
-nftables 只 redirect 同时匹配 `network.ingress_iface` 和 `network.internal_cidr` 的 53/853/80/443。5gws 不直接监听公网默认 `0.0.0.0:80/443`；高位 redirect 后端端口只允许内网来源访问，非内网来源访问默认 80/443 不受影响。
+nftables 只 redirect 同时匹配 `network.ingress_iface` 和 `network.internal_cidr` 的 53/853/80/443 以及已配置的 STUN client port。5gws 不直接监听公网默认 `0.0.0.0:80/443`；高位 redirect 后端端口只允许内网来源访问，非内网来源访问默认 80/443 不受影响。
 
 ## 快速开始
 
@@ -208,6 +209,24 @@ backend_resolvers = ["1.1.1.1:53", "1.0.0.1:53", "8.8.8.8:53", "8.8.4.4:53", "9.
 
 默认 `upstreams_overseas_private` 只使用 `22.22.22.22`；`upstreams_overseas_public` 和 `backend_resolvers` 使用主流公共 DNS 与 `22.22.22.22`。
 
+### STUN UDP Proxy
+
+默认内置两个 STUN UDP proxy，用于处理常见 WebRTC/STUN 探测：
+
+- 客户端 `udp/3478`：本地监听 `13478`，转发到 `stun.cloudflare.com:3478`。
+- 客户端 `udp/19302`：本地监听 `13902`，转发到 `stun.l.google.com:19302`。
+
+通常不需要写入配置；如需覆盖，必须提供完整列表：
+
+```toml
+[[udp_proxies]]
+name = "stun-3478"
+client_port = 3478
+listen_port = 13478
+target = "stun.cloudflare.com:3478"
+exit = "direct"
+```
+
 ### shadowsocks-rust 出口
 
 生成 SS2022 密钥：
@@ -249,6 +268,26 @@ timeout_seconds = 300
 默认规则直接导入 MetaCubeX 的 sing-box source JSON：
 
 ```toml
+[[rules]]
+name = "ip-check"
+exit = "direct"
+domain_suffix = [
+  "icanhazip.com",
+  "ipinfo.io",
+  "ippure.com",
+]
+
+[[rules]]
+name = "ippure-stun"
+exit = "direct"
+domain = [
+  "stun.chat.bilibili.com",
+  "stun.cloudflare.com",
+  "stun.hitv.com",
+  "stun.l.google.com",
+  "stun.miwifi.com",
+]
+
 [[imports]]
 name = "cn"
 type = "sing-box"
@@ -259,6 +298,18 @@ dns_pool = "cn"
 name = "gfw"
 type = "sing-box"
 url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/gfw.json"
+exit = "direct"
+
+[[imports]]
+name = "ip-geo-detect"
+type = "sing-box"
+url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-ip-geo-detect.json"
+exit = "direct"
+
+[[imports]]
+name = "stun"
+type = "sing-box"
+url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-stun.json"
 exit = "direct"
 ```
 
@@ -292,7 +343,7 @@ exit = "ss1"
 - `type = "sing-box"`：source rule-set JSON，不直接消费二进制 `.srs`。
 - `type = "mihomo"` / `"mimoho"` / `"clash"` / `"clash-meta"`：rule-provider YAML。
 
-当前 smartdns-rs 渲染只等价支持 `domain` 和 `domain_suffix`。遇到 `domain_keyword`、`domain_regex`、`ip_cidr`、`rule_set` 会显式失败，避免静默丢规则。MetaCubeX 默认 `cn.json` 和 `gfw.json` 均为 `domain_suffix`，可直接使用。
+当前 smartdns-rs 渲染只等价支持 `domain` 和 `domain_suffix`。遇到 `domain_keyword`、`domain_regex`、`ip_cidr`、`rule_set` 会显式失败，避免静默丢规则。默认使用的 MetaCubeX `cn.json`、`gfw.json`、`category-ip-geo-detect.json` 和 `category-stun.json` 均可直接使用。
 
 如果要扩大到 `geolocation-!cn`：
 
@@ -405,8 +456,8 @@ bot 支持命令和按钮菜单：
 - DoT 域名必须解析到 `network.gateway_ip`，Android 私人 DNS 会按主机名校验证书。
 - 5gws 使用 certbot 签发的公开证书，不使用自签 CA 作为 Android 主路径。
 - `dns.backend_resolvers` 用于 HAProxy 解析真实目标域名，不能指向会返回 `gateway_ip` 的 rewrite 入口。
-- `ippure.com` 等检测站点可能通过 WebRTC/STUN 检测本机真实出口；5gws v1 接管 DNS、80、443，不接管任意 UDP/STUN。
-- 主站 HTTPS 命中 `gateway_ip` 并进入 HAProxy/quicgw，不代表 WebRTC 泄露项会被隐藏。
+- `ippure.com` 等检测站点可能通过 WebRTC/STUN 检测本机真实出口；5gws v1 只接管已配置的 STUN 常见端口，不接管任意 UDP。
+- STUN UDP proxy 是端口级转发，不是按 UDP 包内域名分流；因为 STUN 包本身没有 Host/SNI。
 - 缺 Host/SNI 的 TCP/QUIC 流量会被拒绝，不做静默兜底。
 
 ## 验证发布包

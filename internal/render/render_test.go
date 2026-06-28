@@ -20,10 +20,16 @@ func TestNFTablesRedirectOnlyInternalCIDR(t *testing.T) {
 	if !strings.Contains(out, `udp dport 443 counter redirect to :18443`) {
 		t.Fatalf("UDP/443 redirect counter missing:\n%s", out)
 	}
+	if !strings.Contains(out, `udp dport 3478 counter redirect to :13478`) {
+		t.Fatalf("UDP/3478 STUN redirect counter missing:\n%s", out)
+	}
+	if !strings.Contains(out, `udp dport 19302 counter redirect to :13902`) {
+		t.Fatalf("UDP/19302 STUN redirect counter missing:\n%s", out)
+	}
 	if strings.Contains(out, "flush ruleset") {
 		t.Fatalf("nft output must not flush global ruleset:\n%s", out)
 	}
-	if !strings.Contains(out, `ip saddr != 10.0.0.0/24 udp dport { 1053, 18443 } drop`) {
+	if !strings.Contains(out, `ip saddr != 10.0.0.0/24 udp dport { 1053, 13478, 13902, 18443 } drop`) {
 		t.Fatalf("non-internal UDP backend protection missing:\n%s", out)
 	}
 	if !strings.Contains(out, `ip saddr != 10.0.0.0/24 tcp dport { 1053, 1853, 18080, 18443 } reject with tcp reset`) {

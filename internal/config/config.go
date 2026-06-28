@@ -15,14 +15,15 @@ import (
 )
 
 type Config struct {
-	System   SystemConfig   `toml:"system"`
-	Network  NetworkConfig  `toml:"network"`
-	Routing  RoutingConfig  `toml:"routing"`
-	DNS      DNSConfig      `toml:"dns"`
-	Logging  LoggingConfig  `toml:"logging"`
-	IOS      IOSConfig      `toml:"ios"`
-	Telegram TelegramConfig `toml:"telegram"`
-	Exits    []ExitConfig   `toml:"exits"`
+	System     SystemConfig     `toml:"system"`
+	Network    NetworkConfig    `toml:"network"`
+	Routing    RoutingConfig    `toml:"routing"`
+	DNS        DNSConfig        `toml:"dns"`
+	Logging    LoggingConfig    `toml:"logging"`
+	IOS        IOSConfig        `toml:"ios"`
+	Telegram   TelegramConfig   `toml:"telegram"`
+	UDPProxies []UDPProxyConfig `toml:"udp_proxies"`
+	Exits      []ExitConfig     `toml:"exits"`
 }
 
 type SystemConfig struct {
@@ -79,6 +80,14 @@ type TelegramConfig struct {
 	Enabled      bool     `toml:"enabled"`
 	BotEnv       string   `toml:"bot_env"`
 	AllowedUsers []string `toml:"allowed_users"`
+}
+
+type UDPProxyConfig struct {
+	Name       string `toml:"name"`
+	ClientPort int    `toml:"client_port"`
+	ListenPort int    `toml:"listen_port"`
+	Target     string `toml:"target"`
+	Exit       string `toml:"exit"`
 }
 
 type ExitConfig struct {
@@ -143,6 +152,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Routing.FallbackExit == "" {
 		c.Routing.FallbackExit = "direct"
+	}
+	if len(c.UDPProxies) == 0 {
+		c.UDPProxies = DefaultUDPProxies()
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
@@ -260,7 +272,29 @@ func (c Config) Validate() error {
 	if err := validateRouting(c.Routing, c.Exits); err != nil {
 		return err
 	}
+	if err := validateUDPProxies(c.UDPProxies, c.Exits); err != nil {
+		return err
+	}
 	return nil
+}
+
+func DefaultUDPProxies() []UDPProxyConfig {
+	return []UDPProxyConfig{
+		{
+			Name:       "stun-3478",
+			ClientPort: 3478,
+			ListenPort: 13478,
+			Target:     "stun.cloudflare.com:3478",
+			Exit:       "direct",
+		},
+		{
+			Name:       "stun-19302",
+			ClientPort: 19302,
+			ListenPort: 13902,
+			Target:     "stun.l.google.com:19302",
+			Exit:       "direct",
+		},
+	}
 }
 
 func validateLogging(l LoggingConfig) error {
@@ -381,6 +415,62 @@ func validateExit(exit ExitConfig) error {
 	}
 }
 
+func validateUDPProxies(proxies []UDPProxyConfig, exits []ExitConfig) error {
+	names := map[string]bool{}
+	clientPorts := map[int]string{}
+	listenPorts := map[int]string{}
+	for _, proxy := range proxies {
+		if proxy.Name == "" {
+			return errors.New("udp_proxy name is required")
+		}
+		if !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(proxy.Name) {
+			return fmt.Errorf("udp_proxy %q: name may only contain letters, digits, dot, underscore, and dash", proxy.Name)
+		}
+		if names[proxy.Name] {
+			return fmt.Errorf("duplicate udp_proxy name: %s", proxy.Name)
+		}
+		names[proxy.Name] = true
+		if err := validatePort("udp_proxy "+proxy.Name+" client_port", proxy.ClientPort); err != nil {
+			return err
+		}
+		if err := validatePort("udp_proxy "+proxy.Name+" listen_port", proxy.ListenPort); err != nil {
+			return err
+		}
+		if previous := clientPorts[proxy.ClientPort]; previous != "" {
+			return fmt.Errorf("udp_proxy %q: client_port %d already used by %q", proxy.Name, proxy.ClientPort, previous)
+		}
+		clientPorts[proxy.ClientPort] = proxy.Name
+		if previous := listenPorts[proxy.ListenPort]; previous != "" {
+			return fmt.Errorf("udp_proxy %q: listen_port %d already used by %q", proxy.Name, proxy.ListenPort, previous)
+		}
+		listenPorts[proxy.ListenPort] = proxy.Name
+		host, _, err := proxy.TargetHostPort()
+		if err != nil {
+			return fmt.Errorf("udp_proxy %q: %w", proxy.Name, err)
+		}
+		if net.ParseIP(host) == nil {
+			if err := validateDomainName("udp_proxy "+proxy.Name+" target host", host); err != nil {
+				return err
+			}
+		}
+		exit, ok := findExit(exits, proxy.Exit)
+		if !ok {
+			return fmt.Errorf("udp_proxy %q references unknown exit %q", proxy.Name, proxy.Exit)
+		}
+		if exit.Type == "shadowsocks-rust" && !exit.UDPEnabled() {
+			return fmt.Errorf("udp_proxy %q references exit %q with udp=false", proxy.Name, proxy.Exit)
+		}
+	}
+	return nil
+}
+
+func validatePort(field string, port int) error {
+	if port <= 0 || port > 65535 {
+		return fmt.Errorf("%s is invalid: %d", field, port)
+	}
+	return nil
+}
+
 func validateShadowsocksExit(exit ExitConfig) error {
 	if exit.Server == "" {
 		return fmt.Errorf("exit %q: server is required", exit.Name)
@@ -422,6 +512,21 @@ func validateSSKey(method, password string) error {
 		return fmt.Errorf("password key length for %s is %d bytes, want %d; generate one with: openssl rand -base64 %d", method, len(key), want, want)
 	}
 	return nil
+}
+
+func (p UDPProxyConfig) TargetHostPort() (string, int, error) {
+	host, port, err := net.SplitHostPort(p.Target)
+	if err != nil {
+		return "", 0, fmt.Errorf("target must be host:port: %w", err)
+	}
+	if host == "" {
+		return "", 0, errors.New("target host is required")
+	}
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum <= 0 || portNum > 65535 {
+		return "", 0, fmt.Errorf("target port is invalid: %q", port)
+	}
+	return host, portNum, nil
 }
 
 func (l LoggingConfig) AccessEnabled() bool {
@@ -474,7 +579,11 @@ func validateHostPort(field, addr string, requireLoopback bool) error {
 }
 
 func (c Config) ExitByName(name string) (ExitConfig, bool) {
-	for _, exit := range c.Exits {
+	return findExit(c.Exits, name)
+}
+
+func findExit(exits []ExitConfig, name string) (ExitConfig, bool) {
+	for _, exit := range exits {
 		if exit.Name == name {
 			return exit, true
 		}

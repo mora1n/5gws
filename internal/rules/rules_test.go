@@ -43,6 +43,22 @@ func TestNormalizeImportsSingBoxAndMihomo(t *testing.T) {
 	}
 }
 
+func TestNormalizeImportsSingBoxStringMatcher(t *testing.T) {
+	dir := t.TempDir()
+	singPath := filepath.Join(dir, "sing.json")
+	mustWrite(t, singPath, `{"version":2,"rules":[{"domain_suffix":"example.com"}]}`)
+
+	norm, err := Normalize(File{
+		Imports: []Import{{Name: "stun", Type: "sing-box", Path: singPath, Exit: "direct"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := norm.Rules[0].DomainSuffix; len(got) != 1 || got[0] != "example.com" {
+		t.Fatalf("domain_suffix = %#v, want [example.com]", got)
+	}
+}
+
 func TestNormalizeRejectsAmbiguousRuleAction(t *testing.T) {
 	_, err := Normalize(File{Rules: []Rule{{
 		Name:         "bad",

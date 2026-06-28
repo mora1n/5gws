@@ -6,6 +6,24 @@ ingress_iface = "eth0"
 [routing]
 fallback_exit = "direct"
 
+# 默认内置两个 STUN UDP proxy：
+# udp/3478 -> 127.0.0.1:13478 -> stun.cloudflare.com:3478
+# udp/19302 -> 127.0.0.1:13902 -> stun.l.google.com:19302
+# 如需覆盖默认值，取消注释并填写完整列表。
+# [[udp_proxies]]
+# name = "stun-3478"
+# client_port = 3478
+# listen_port = 13478
+# target = "stun.cloudflare.com:3478"
+# exit = "direct"
+#
+# [[udp_proxies]]
+# name = "stun-19302"
+# client_port = 19302
+# listen_port = 13902
+# target = "stun.l.google.com:19302"
+# exit = "direct"
+
 [dns]
 dot_domain = "dot.example.com"
 cert_file = "/etc/5gws/certs/fullchain.pem"

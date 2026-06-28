@@ -107,6 +107,54 @@ type Rule struct {
 	RuleSet       []string `toml:"rule_set" json:"rule_set" yaml:"rule_set"`
 }
 
+func (r *Rule) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Name          string         `json:"name"`
+		Exit          string         `json:"exit"`
+		DNSPool       string         `json:"dns_pool"`
+		Domain        jsonStringList `json:"domain"`
+		DomainSuffix  jsonStringList `json:"domain_suffix"`
+		DomainKeyword jsonStringList `json:"domain_keyword"`
+		DomainRegex   jsonStringList `json:"domain_regex"`
+		IPCIDR        jsonStringList `json:"ip_cidr"`
+		RuleSet       jsonStringList `json:"rule_set"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = Rule{
+		Name:          raw.Name,
+		Exit:          raw.Exit,
+		DNSPool:       raw.DNSPool,
+		Domain:        []string(raw.Domain),
+		DomainSuffix:  []string(raw.DomainSuffix),
+		DomainKeyword: []string(raw.DomainKeyword),
+		DomainRegex:   []string(raw.DomainRegex),
+		IPCIDR:        []string(raw.IPCIDR),
+		RuleSet:       []string(raw.RuleSet),
+	}
+	return nil
+}
+
+type jsonStringList []string
+
+func (l *jsonStringList) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+	var one string
+	if err := json.Unmarshal(data, &one); err == nil {
+		*l = []string{one}
+		return nil
+	}
+	var many []string
+	if err := json.Unmarshal(data, &many); err == nil {
+		*l = many
+		return nil
+	}
+	return fmt.Errorf("must be string or string array")
+}
+
 type Normalized struct {
 	Rules []Rule
 }

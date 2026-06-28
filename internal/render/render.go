@@ -122,16 +122,22 @@ func HAProxy(cfg config.Config, norm rules.Normalized) string {
 }
 
 func NFTables(cfg config.Config) string {
+	dnsUDPPort := mustPort(cfg.DNS.ListenUDP)
+	udpProxies := buildUDPProxyViews(cfg.UDPProxies)
 	data := struct {
-		Config     config.Config
-		DNSUDPPort int
-		DNSTCPPort int
-		DNSDOTPort int
+		Config            config.Config
+		DNSUDPPort        int
+		DNSTCPPort        int
+		DNSDOTPort        int
+		UDPProxies        []udpProxyView
+		ProtectedUDPPorts string
 	}{
-		Config:     cfg,
-		DNSUDPPort: mustPort(cfg.DNS.ListenUDP),
-		DNSTCPPort: mustPort(cfg.DNS.ListenTCP),
-		DNSDOTPort: mustPort(cfg.DNS.ListenDOT),
+		Config:            cfg,
+		DNSUDPPort:        dnsUDPPort,
+		DNSTCPPort:        mustPort(cfg.DNS.ListenTCP),
+		DNSDOTPort:        mustPort(cfg.DNS.ListenDOT),
+		UDPProxies:        udpProxies,
+		ProtectedUDPPorts: joinInts(uniqueInts(append([]int{dnsUDPPort, cfg.Network.QUICRedirectPort}, udpProxyListenPorts(udpProxies)...))),
 	}
 	return mustExecute(nftTemplate, data)
 }
@@ -162,6 +168,11 @@ type exitView struct {
 	Socks4 string
 }
 
+type udpProxyView struct {
+	ClientPort int
+	ListenPort int
+}
+
 func buildRuleViews(src []rules.Rule) []ruleView {
 	views := make([]ruleView, 0, len(src))
 	for i, rule := range src {
@@ -181,6 +192,44 @@ func buildExitViews(cfg config.Config, names []string) []exitView {
 		views = append(views, view)
 	}
 	return views
+}
+
+func buildUDPProxyViews(src []config.UDPProxyConfig) []udpProxyView {
+	views := make([]udpProxyView, 0, len(src))
+	for _, proxy := range src {
+		views = append(views, udpProxyView{ClientPort: proxy.ClientPort, ListenPort: proxy.ListenPort})
+	}
+	return views
+}
+
+func udpProxyListenPorts(proxies []udpProxyView) []int {
+	ports := make([]int, 0, len(proxies))
+	for _, proxy := range proxies {
+		ports = append(ports, proxy.ListenPort)
+	}
+	return ports
+}
+
+func uniqueInts(values []int) []int {
+	seen := map[int]bool{}
+	out := make([]int, 0, len(values))
+	for _, value := range values {
+		if seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	sort.Ints(out)
+	return out
+}
+
+func joinInts(values []int) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, strconv.Itoa(value))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func sanitize(value string) string {
@@ -359,11 +408,14 @@ table inet fivegws {
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 80 counter redirect to :{{ .Config.Network.HTTPRedirectPort }}
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 443 counter redirect to :{{ .Config.Network.HTTPSRedirectPort }}
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport 443 counter redirect to :{{ .Config.Network.QUICRedirectPort }}
+{{- range .UDPProxies }}
+        iifname {{ quote $.Config.Network.IngressIface }} ip saddr {{ $.Config.Network.InternalCIDR }} udp dport {{ .ClientPort }} counter redirect to :{{ .ListenPort }}
+{{- end }}
     }
 
     chain input {
         type filter hook input priority filter; policy accept;
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr != {{ .Config.Network.InternalCIDR }} udp dport { {{ .DNSUDPPort }}, {{ .Config.Network.QUICRedirectPort }} } drop
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr != {{ .Config.Network.InternalCIDR }} udp dport { {{ .ProtectedUDPPorts }} } drop
         iifname {{ quote .Config.Network.IngressIface }} ip saddr != {{ .Config.Network.InternalCIDR }} tcp dport { {{ .DNSTCPPort }}, {{ .DNSDOTPort }}, {{ .Config.Network.HTTPRedirectPort }}, {{ .Config.Network.HTTPSRedirectPort }} } reject with tcp reset
     }
 }
