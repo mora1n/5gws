@@ -367,19 +367,7 @@ exit = "ss1"
 - `type = "sing-box"`：source rule-set JSON，不直接消费二进制 `.srs`。
 - `type = "mihomo"` / `"mimoho"` / `"clash"` / `"clash-meta"`：rule-provider YAML。
 
-当前 smartdns-rs 渲染只等价支持 `domain` 和 `domain_suffix`。导入 sing-box / Mihomo ruleset 时，`domain_keyword`、`domain_regex`、`ip_cidr`、`rule_set` 等无法等价渲染的 matcher 会被跳过，并在 `5gws apply/render/doctor` 输出 `warning`；手写 `[[rules]]` 仍然严格校验，避免误以为规则已生效。同一域名重复命中时，靠前规则优先。默认使用的 MetaCubeX `cn.json`、`category-speedtest.json`、`gfw.json`、`category-ip-geo-detect.json` 和 `category-stun.json` 均可直接使用。
-
-如果要扩大到 `geolocation-!cn`：
-
-```toml
-[[imports]]
-name = "geolocation-not-cn"
-type = "sing-box"
-url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/geolocation-!cn.json"
-exit = "direct"
-```
-
-注意：该 ruleset 当前包含 `domain_regex`，v1 会显式拒绝，默认不启用。
+当前 smartdns-rs 只等价支持 `domain` 和 `domain_suffix`；导入 sing-box / Mihomo ruleset 时，其它 matcher 会跳过并在 `5gws apply/render/doctor` 输出 `warning`。手写 `[[rules]]` 仍然严格校验，且同一域名重复命中时靠前规则优先。默认可直接使用 MetaCubeX `cn.json`、`category-speedtest.json`、`gfw.json`、`category-ip-geo-detect.json` 和 `category-stun.json`。
 
 ## 客户端设置
 
