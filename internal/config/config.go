@@ -22,6 +22,7 @@ type Config struct {
 	Logging    LoggingConfig    `toml:"logging"`
 	IOS        IOSConfig        `toml:"ios"`
 	Telegram   TelegramConfig   `toml:"telegram"`
+	TCPProxies []TCPProxyConfig `toml:"tcp_proxies"`
 	UDPProxies []UDPProxyConfig `toml:"udp_proxies"`
 	Exits      []ExitConfig     `toml:"exits"`
 }
@@ -90,6 +91,13 @@ type UDPProxyConfig struct {
 	Exit       string `toml:"exit"`
 }
 
+type TCPProxyConfig struct {
+	Name       string `toml:"name"`
+	ClientPort int    `toml:"client_port"`
+	ListenPort int    `toml:"listen_port"`
+	Exit       string `toml:"exit"`
+}
+
 type ExitConfig struct {
 	Name           string `toml:"name"`
 	Type           string `toml:"type"`
@@ -152,6 +160,14 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Routing.FallbackExit == "" {
 		c.Routing.FallbackExit = "direct"
+	}
+	if len(c.TCPProxies) == 0 {
+		c.TCPProxies = DefaultTCPProxies()
+	}
+	for i := range c.TCPProxies {
+		if c.TCPProxies[i].Exit == "" {
+			c.TCPProxies[i].Exit = "direct"
+		}
 	}
 	if len(c.UDPProxies) == 0 {
 		c.UDPProxies = DefaultUDPProxies()
@@ -272,10 +288,30 @@ func (c Config) Validate() error {
 	if err := validateRouting(c.Routing, c.Exits); err != nil {
 		return err
 	}
+	if err := validateTCPProxies(c.TCPProxies, c); err != nil {
+		return err
+	}
 	if err := validateUDPProxies(c.UDPProxies, c.Exits); err != nil {
 		return err
 	}
 	return nil
+}
+
+func DefaultTCPProxies() []TCPProxyConfig {
+	return []TCPProxyConfig{
+		{
+			Name:       "speedtest-8080",
+			ClientPort: 8080,
+			ListenPort: 18081,
+			Exit:       "direct",
+		},
+		{
+			Name:       "speedtest-5060",
+			ClientPort: 5060,
+			ListenPort: 15060,
+			Exit:       "direct",
+		},
+	}
 }
 
 func DefaultUDPProxies() []UDPProxyConfig {
@@ -413,6 +449,80 @@ func validateExit(exit ExitConfig) error {
 	default:
 		return fmt.Errorf("exit %q: unsupported type %q", exit.Name, exit.Type)
 	}
+}
+
+func validateTCPProxies(proxies []TCPProxyConfig, cfg Config) error {
+	names := map[string]bool{}
+	clientPorts := map[int]string{}
+	listenPorts := reservedTCPPorts(cfg)
+	for _, proxy := range proxies {
+		if proxy.Name == "" {
+			return errors.New("tcp_proxy name is required")
+		}
+		if !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(proxy.Name) {
+			return fmt.Errorf("tcp_proxy %q: name may only contain letters, digits, dot, underscore, and dash", proxy.Name)
+		}
+		if names[proxy.Name] {
+			return fmt.Errorf("duplicate tcp_proxy name: %s", proxy.Name)
+		}
+		names[proxy.Name] = true
+		if err := validatePort("tcp_proxy "+proxy.Name+" client_port", proxy.ClientPort); err != nil {
+			return err
+		}
+		if err := validatePort("tcp_proxy "+proxy.Name+" listen_port", proxy.ListenPort); err != nil {
+			return err
+		}
+		if previous := clientPorts[proxy.ClientPort]; previous != "" {
+			return fmt.Errorf("tcp_proxy %q: client_port %d already used by %q", proxy.Name, proxy.ClientPort, previous)
+		}
+		clientPorts[proxy.ClientPort] = proxy.Name
+		if previous := listenPorts[proxy.ListenPort]; previous != "" {
+			return fmt.Errorf("tcp_proxy %q: listen_port %d conflicts with %s", proxy.Name, proxy.ListenPort, previous)
+		}
+		listenPorts[proxy.ListenPort] = "tcp_proxy " + proxy.Name
+		exit, ok := findExit(cfg.Exits, proxy.Exit)
+		if !ok {
+			return fmt.Errorf("tcp_proxy %q references unknown exit %q", proxy.Name, proxy.Exit)
+		}
+		if exit.Type == "shadowsocks-rust" && !exit.TCPEnabled() {
+			return fmt.Errorf("tcp_proxy %q references exit %q with tcp=false", proxy.Name, proxy.Exit)
+		}
+	}
+	return nil
+}
+
+func reservedTCPPorts(cfg Config) map[int]string {
+	ports := map[int]string{
+		80:                            "built-in tcp/80 redirect",
+		443:                           "built-in tcp/443 redirect",
+		cfg.Network.HTTPRedirectPort:  "network.http_redirect_port",
+		cfg.Network.HTTPSRedirectPort: "network.https_redirect_port",
+	}
+	for field, addr := range map[string]string{
+		"dns.listen_tcp":        cfg.DNS.ListenTCP,
+		"dns.listen_dot":        cfg.DNS.ListenDOT,
+		"dns.listen_public_dot": cfg.DNS.ListenPublicDOT,
+	} {
+		if port := hostPortNumber(addr); port != 0 {
+			ports[port] = field
+		}
+	}
+	return ports
+}
+
+func hostPortNumber(addr string) int {
+	if addr == "" {
+		return 0
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	value, err := strconv.Atoi(port)
+	if err != nil {
+		return 0
+	}
+	return value
 }
 
 func validateUDPProxies(proxies []UDPProxyConfig, exits []ExitConfig) error {

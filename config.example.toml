@@ -6,6 +6,22 @@ ingress_iface = "eth0"
 [routing]
 fallback_exit = "direct"
 
+# 默认内置两个 Speedtest TCP proxy：
+# tcp/8080 -> 127.0.0.1:18081 -> 原始目标:8080
+# tcp/5060 -> 127.0.0.1:15060 -> 原始目标:5060
+# 如需覆盖默认值，取消注释并填写完整列表。
+# [[tcp_proxies]]
+# name = "speedtest-8080"
+# client_port = 8080
+# listen_port = 18081
+# exit = "direct"
+#
+# [[tcp_proxies]]
+# name = "speedtest-5060"
+# client_port = 5060
+# listen_port = 15060
+# exit = "direct"
+
 # 默认内置两个 STUN UDP proxy：
 # udp/3478 -> 127.0.0.1:13478 -> stun.cloudflare.com:3478
 # udp/19302 -> 127.0.0.1:13902 -> stun.l.google.com:19302

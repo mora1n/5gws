@@ -21,6 +21,9 @@ func (h handler) configSummary() string {
 	fmt.Fprintf(&b, "config: %s\nrules: %s\n", h.configPath, h.rulesPath)
 	fmt.Fprintf(&b, "network: gateway=%s internal=%s iface=%s\n", cfg.Network.GatewayIP, cfg.Network.InternalCIDR, cfg.Network.IngressIface)
 	fmt.Fprintf(&b, "redirect: tcp/80->%d tcp/443->%d udp/443->%d\n", cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort, cfg.Network.QUICRedirectPort)
+	for _, proxy := range cfg.TCPProxies {
+		fmt.Fprintf(&b, "tcp_proxy: tcp/%d->%d exit=%s\n", proxy.ClientPort, proxy.ListenPort, proxy.Exit)
+	}
 	for _, proxy := range cfg.UDPProxies {
 		fmt.Fprintf(&b, "udp_proxy: udp/%d->%d target=%s exit=%s\n", proxy.ClientPort, proxy.ListenPort, proxy.Target, proxy.Exit)
 	}

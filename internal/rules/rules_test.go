@@ -3,6 +3,7 @@ package rules
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,11 +83,78 @@ func TestNormalizeRejectsImportWithoutAction(t *testing.T) {
 	}
 }
 
-func TestMihomoUnsupportedMatcherErrors(t *testing.T) {
-	err := addMihomoPayload(&Rule{}, "PROCESS-NAME,curl")
-	if err == nil {
-		t.Fatal("expected unsupported matcher error")
+func TestNormalizeSkipsUnsupportedSingBoxImportMatchers(t *testing.T) {
+	dir := t.TempDir()
+	singPath := filepath.Join(dir, "speedtest.json")
+	mustWrite(t, singPath, `{"version":2,"rules":[
+		{"domain_suffix":["ookla.com"],"domain_regex":"^speed\\.example$"},
+		{"domain_regex":"^only-regex\\.example$"}
+	]}`)
+
+	norm, err := Normalize(File{
+		Imports: []Import{{Name: "speedtest", Type: "sing-box", Path: singPath, Exit: "direct"}},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
+	if got := len(norm.Rules); got != 1 {
+		t.Fatalf("rules count = %d, want 1", got)
+	}
+	if got := norm.Rules[0].DomainSuffix; len(got) != 1 || got[0] != "ookla.com" {
+		t.Fatalf("domain_suffix = %#v, want [ookla.com]", got)
+	}
+	joined := warningText(norm.Warnings)
+	for _, want := range []string{"domain_regex", "speedtest-1", "speedtest-2", "no supported matchers"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("warnings missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestNormalizeSkipsUnsupportedMihomoImportMatchers(t *testing.T) {
+	dir := t.TempDir()
+	mihomoPath := filepath.Join(dir, "mihomo.yaml")
+	mustWrite(t, mihomoPath, "payload:\n  - DOMAIN-SUFFIX,ookla.com\n  - DOMAIN-REGEX,^speed\\.example$\n  - IP-CIDR,192.0.2.0/24\n  - PROCESS-NAME,curl\n")
+
+	norm, err := Normalize(File{
+		Imports: []Import{{Name: "speedtest", Type: "mihomo", Path: mihomoPath, Exit: "direct"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(norm.Rules); got != 1 {
+		t.Fatalf("rules count = %d, want 1", got)
+	}
+	if got := norm.Rules[0].DomainSuffix; len(got) != 1 || got[0] != "ookla.com" {
+		t.Fatalf("domain_suffix = %#v, want [ookla.com]", got)
+	}
+	joined := warningText(norm.Warnings)
+	for _, want := range []string{"DOMAIN-REGEX", "IP-CIDR", "PROCESS-NAME"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("warnings missing %q:\n%s", want, joined)
+		}
+	}
+}
+
+func TestNormalizeRejectsMalformedMihomoPayload(t *testing.T) {
+	dir := t.TempDir()
+	mihomoPath := filepath.Join(dir, "mihomo.yaml")
+	mustWrite(t, mihomoPath, "payload:\n  - DOMAIN-SUFFIX\n")
+
+	_, err := Normalize(File{
+		Imports: []Import{{Name: "bad", Type: "mihomo", Path: mihomoPath, Exit: "direct"}},
+	})
+	if err == nil {
+		t.Fatal("expected malformed payload to fail")
+	}
+}
+
+func warningText(warnings []Warning) string {
+	var parts []string
+	for _, warning := range warnings {
+		parts = append(parts, warning.String())
+	}
+	return strings.Join(parts, "\n")
 }
 
 func mustWrite(t *testing.T, path, content string) {

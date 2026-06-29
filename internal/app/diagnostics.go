@@ -149,7 +149,7 @@ func cmdDetectCIDR(args []string, out io.Writer) error {
 }
 
 func runTCPDump(iface string, seconds, count int) (string, error) {
-	filter := "(tcp port 53 or tcp port 80 or tcp port 443 or tcp port 853 or udp port 53 or udp port 443 or udp port 3478 or udp port 19302)"
+	filter := "(tcp port 53 or tcp port 80 or tcp port 443 or tcp port 853 or tcp port 5060 or tcp port 8080 or udp port 53 or udp port 443 or udp port 3478 or udp port 19302)"
 	args := []string{
 		strconv.Itoa(seconds) + "s",
 		"tcpdump",

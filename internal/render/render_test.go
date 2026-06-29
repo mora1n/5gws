@@ -20,6 +20,12 @@ func TestNFTablesRedirectOnlyInternalCIDR(t *testing.T) {
 	if !strings.Contains(out, `udp dport 443 counter redirect to :18443`) {
 		t.Fatalf("UDP/443 redirect counter missing:\n%s", out)
 	}
+	if !strings.Contains(out, `tcp dport 8080 counter redirect to :18081`) {
+		t.Fatalf("TCP/8080 Speedtest redirect counter missing:\n%s", out)
+	}
+	if !strings.Contains(out, `tcp dport 5060 counter redirect to :15060`) {
+		t.Fatalf("TCP/5060 Speedtest redirect counter missing:\n%s", out)
+	}
 	if !strings.Contains(out, `udp dport 3478 counter redirect to :13478`) {
 		t.Fatalf("UDP/3478 STUN redirect counter missing:\n%s", out)
 	}
@@ -32,7 +38,7 @@ func TestNFTablesRedirectOnlyInternalCIDR(t *testing.T) {
 	if !strings.Contains(out, `ip saddr != 10.0.0.0/24 udp dport { 1053, 13478, 13902, 18443 } drop`) {
 		t.Fatalf("non-internal UDP backend protection missing:\n%s", out)
 	}
-	if !strings.Contains(out, `ip saddr != 10.0.0.0/24 tcp dport { 1053, 1853, 18080, 18443 } reject with tcp reset`) {
+	if !strings.Contains(out, `ip saddr != 10.0.0.0/24 tcp dport { 1053, 1853, 15060, 18080, 18081, 18443 } reject with tcp reset`) {
 		t.Fatalf("non-internal TCP backend protection missing:\n%s", out)
 	}
 	if strings.Contains(out, `ip saddr 10.0.0.0/24 udp dport { 53, 443, 1053 } accept`) ||
@@ -55,6 +61,9 @@ func TestHAProxyUsesFallbackForUnknownHostOrSNI(t *testing.T) {
 	}
 	if !strings.Contains(out, "bind 0.0.0.0:18080") || !strings.Contains(out, "bind 0.0.0.0:18443") {
 		t.Fatalf("HAProxy redirect backends must listen on high ports:\n%s", out)
+	}
+	if strings.Contains(out, "http_hp") || strings.Contains(out, "bind 0.0.0.0:18081") || strings.Contains(out, "bind 0.0.0.0:15060") {
+		t.Fatalf("HAProxy must not render Speedtest TCP proxy frontends:\n%s", out)
 	}
 	if strings.Contains(out, "bind 0.0.0.0:80") || strings.Contains(out, "bind 0.0.0.0:443") {
 		t.Fatalf("HAProxy must not bind public 80/443:\n%s", out)

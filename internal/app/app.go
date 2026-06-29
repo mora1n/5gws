@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -107,6 +108,7 @@ func cmdRender(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	printRuleWarnings(out, norm.Warnings)
 	files, err := render.Generate(cfg, norm)
 	if err != nil {
 		return err
@@ -130,6 +132,7 @@ func cmdApply(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	printRuleWarnings(out, norm.Warnings)
 	outDir := filepath.Join(cfg.System.StateDir, "rendered")
 	files, err := render.Generate(cfg, norm)
 	if err != nil {
@@ -163,6 +166,7 @@ func cmdInstall(args []string, stdin io.Reader, out io.Writer) error {
 		return err
 	}
 	printInstallSummary(out, cfg, norm)
+	printRuleWarnings(out, norm.Warnings)
 	if !*assumeYes && !confirm(reader, out, "Continue install?") {
 		return errors.New("install cancelled")
 	}
@@ -263,6 +267,7 @@ func cmdDoctor(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	printRuleWarnings(out, norm.Warnings)
 	if _, err := render.Generate(cfg, norm); err != nil {
 		return err
 	}
@@ -370,6 +375,7 @@ func cmdQUICGW(args []string) error {
 	if err != nil {
 		return err
 	}
+	logRuleWarnings(norm.Warnings)
 	return quic.Run(context.Background(), cfg, norm)
 }
 
@@ -473,6 +479,18 @@ func loadAll(cfgPath, rulesPath string) (config.Config, rules.Normalized, error)
 	}
 	norm, err := rules.Normalize(ruleFile)
 	return cfg, norm, err
+}
+
+func printRuleWarnings(out io.Writer, warnings []rules.Warning) {
+	for _, warning := range warnings {
+		fmt.Fprintf(out, "warning: %s\n", warning.String())
+	}
+}
+
+func logRuleWarnings(warnings []rules.Warning) {
+	for _, warning := range warnings {
+		log.Printf("warning: %s", warning.String())
+	}
 }
 
 type generatedInputs struct {
@@ -615,6 +633,7 @@ func encodeConfig(cfg config.Config) (string, error) {
 		}
 		writeStringSlice(&b, "allowed_users", cfg.Telegram.AllowedUsers, nil)
 	}
+	writeTCPProxies(&b, cfg.TCPProxies)
 	writeUDPProxies(&b, cfg.UDPProxies)
 	for _, exit := range cfg.Exits {
 		writeExitConfig(&b, exit)
@@ -650,6 +669,28 @@ func writeStringSlice(b *strings.Builder, name string, values, defaultValues []s
 }
 
 func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func writeTCPProxies(b *strings.Builder, proxies []config.TCPProxyConfig) {
+	if sameTCPProxies(proxies, config.DefaultTCPProxies()) {
+		return
+	}
+	for _, proxy := range proxies {
+		fmt.Fprintf(b, "\n[[tcp_proxies]]\nname = %q\nclient_port = %d\nlisten_port = %d\nexit = %q\n",
+			proxy.Name, proxy.ClientPort, proxy.ListenPort, proxy.Exit)
+	}
+}
+
+func sameTCPProxies(a, b []config.TCPProxyConfig) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -882,6 +923,12 @@ url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosi
 dns_pool = "cn"
 
 [[imports]]
+name = "speedtest"
+type = "sing-box"
+url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-speedtest.json"
+dns_pool = "overseas_private"
+
+[[imports]]
 name = "gfw"
 type = "sing-box"
 url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/gfw.json"
@@ -944,6 +991,9 @@ func printInstallSummary(w io.Writer, cfg config.Config, norm rules.Normalized) 
 	fmt.Fprintf(w, "internal_cidr: %s via %s\n", cfg.Network.InternalCIDR, cfg.Network.IngressIface)
 	fmt.Fprintf(w, "dot_domain: %s\n", cfg.DNS.DOTDomain)
 	fmt.Fprintf(w, "redirect: tcp/80->%d tcp/443->%d udp/443->%d\n", cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort, cfg.Network.QUICRedirectPort)
+	for _, proxy := range cfg.TCPProxies {
+		fmt.Fprintf(w, "tcp_proxy: tcp/%d->%d exit=%s\n", proxy.ClientPort, proxy.ListenPort, proxy.Exit)
+	}
 	for _, proxy := range cfg.UDPProxies {
 		fmt.Fprintf(w, "udp_proxy: udp/%d->%d target=%s exit=%s\n", proxy.ClientPort, proxy.ListenPort, proxy.Target, proxy.Exit)
 	}

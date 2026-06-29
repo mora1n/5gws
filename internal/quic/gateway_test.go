@@ -2,6 +2,7 @@ package quic
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net"
 	"strconv"
@@ -106,6 +107,113 @@ func TestUDPProxyRelaysDirectTarget(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("proxy serve did not stop after context cancellation")
+	}
+}
+
+func TestTCPProxyRelaysOriginalDestination(t *testing.T) {
+	upstream, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		conn, err := upstream.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		buf := make([]byte, 1024)
+		n, err := conn.Read(buf)
+		if err != nil {
+			return
+		}
+		_, _ = conn.Write(append([]byte("echo:"), buf[:n]...))
+	}()
+
+	cfg := testConfig()
+	cfg.TCPProxies = []config.TCPProxyConfig{{
+		Name:       "speedtest-test",
+		ClientPort: 8080,
+		ListenPort: 0,
+		Exit:       "direct",
+	}}
+	proxy, err := listenTCPProxy(cfg, cfg.TCPProxies[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.close()
+	proxy.originalDst = func(*net.TCPConn) (*net.TCPAddr, error) {
+		return upstream.Addr().(*net.TCPAddr), nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- proxy.serve(ctx)
+	}()
+
+	port := proxy.listener.Addr().(*net.TCPAddr).Port
+	client, err := net.Dial("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 1024)
+	n, err := client.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(buf[:n]); got != "echo:ping" {
+		t.Fatalf("tcp proxy response = %q, want echo:ping", got)
+	}
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatalf("proxy serve returned %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("proxy serve did not stop after context cancellation")
+	}
+}
+
+func TestSniffTCPHost(t *testing.T) {
+	httpData := []byte("GET / HTTP/1.1\r\nHost: Speed.Example:8080\r\n\r\n")
+	if host, source := sniffTCPHost(httpData); host != "speed.example" || source != "http_host" {
+		t.Fatalf("sniffTCPHost HTTP = %q/%q, want speed.example/http_host", host, source)
+	}
+
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	tlsClient := tls.Client(client, &tls.Config{ServerName: "SNI.Example", InsecureSkipVerify: true})
+	done := make(chan struct{})
+	go func() {
+		_ = tlsClient.Handshake()
+		close(done)
+	}()
+	buf := make([]byte, 4096)
+	if err := server.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	n, err := server.Read(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Close()
+	<-done
+	if host, source := sniffTCPHost(buf[:n]); host != "sni.example" || source != "tls_sni" {
+		t.Fatalf("sniffTCPHost TLS = %q/%q, want sni.example/tls_sni", host, source)
+	}
+
+	if host, source := sniffTCPHost([]byte("raw speedtest payload")); host != "" || source != "" {
+		t.Fatalf("sniffTCPHost raw = %q/%q, want empty", host, source)
 	}
 }
 

@@ -101,6 +101,18 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	if !cfg.Logging.AccessEnabled() {
 		t.Fatal("logging access should default to true")
 	}
+	wantTCPProxies := []TCPProxyConfig{
+		{Name: "speedtest-8080", ClientPort: 8080, ListenPort: 18081, Exit: "direct"},
+		{Name: "speedtest-5060", ClientPort: 5060, ListenPort: 15060, Exit: "direct"},
+	}
+	if len(cfg.TCPProxies) != len(wantTCPProxies) {
+		t.Fatalf("tcp proxy count = %d, want %d", len(cfg.TCPProxies), len(wantTCPProxies))
+	}
+	for i := range wantTCPProxies {
+		if cfg.TCPProxies[i] != wantTCPProxies[i] {
+			t.Fatalf("tcp proxy %d = %#v, want %#v", i, cfg.TCPProxies[i], wantTCPProxies[i])
+		}
+	}
 	wantUDPProxies := []UDPProxyConfig{
 		{Name: "stun-3478", ClientPort: 3478, ListenPort: 13478, Target: "stun.cloudflare.com:3478", Exit: "direct"},
 		{Name: "stun-19302", ClientPort: 19302, ListenPort: 13902, Target: "stun.l.google.com:19302", Exit: "direct"},
@@ -214,6 +226,50 @@ func TestValidateRejectsTCPDisabledFallbackExit(t *testing.T) {
 	cfg.Routing.FallbackExit = exit.Name
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected tcp-disabled fallback exit to be rejected")
+	}
+}
+
+func TestValidateRejectsTCPProxyListenPortConflict(t *testing.T) {
+	cfg := validConfig()
+	cfg.TCPProxies = []TCPProxyConfig{{
+		Name:       "bad",
+		ClientPort: 8080,
+		ListenPort: cfg.Network.HTTPRedirectPort,
+		Exit:       "direct",
+	}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected conflicting tcp proxy listen port to be rejected")
+	}
+}
+
+func TestValidateRejectsTCPProxyWithUnknownExit(t *testing.T) {
+	cfg := validConfig()
+	cfg.TCPProxies = []TCPProxyConfig{{
+		Name:       "speedtest-test",
+		ClientPort: 8080,
+		ListenPort: 18081,
+		Exit:       "missing",
+	}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected unknown exit to be rejected for tcp proxy")
+	}
+}
+
+func TestValidateRejectsTCPProxyWithTCPDisabledExit(t *testing.T) {
+	cfg := validConfig()
+	tcp, udp := false, true
+	exit := validSSExit()
+	exit.TCP = &tcp
+	exit.UDP = &udp
+	cfg.Exits = append(cfg.Exits, exit)
+	cfg.TCPProxies = []TCPProxyConfig{{
+		Name:       "speedtest-test",
+		ClientPort: 8080,
+		ListenPort: 18081,
+		Exit:       exit.Name,
+	}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected tcp-disabled exit to be rejected for tcp proxy")
 	}
 }
 

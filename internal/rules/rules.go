@@ -156,7 +156,29 @@ func (l *jsonStringList) UnmarshalJSON(data []byte) error {
 }
 
 type Normalized struct {
-	Rules []Rule
+	Rules    []Rule
+	Warnings []Warning
+}
+
+type Warning struct {
+	Import  string
+	Rule    string
+	Matcher string
+	Detail  string
+}
+
+func (w Warning) String() string {
+	parts := []string{"skipped import", w.Import}
+	if w.Rule != "" {
+		parts = append(parts, "rule", w.Rule)
+	}
+	if w.Matcher != "" {
+		parts = append(parts, "matcher", w.Matcher)
+	}
+	if w.Detail != "" {
+		parts = append(parts, ":", w.Detail)
+	}
+	return strings.Join(parts, " ")
 }
 
 func Load(path string) (File, error) {
@@ -173,6 +195,7 @@ func Load(path string) (File, error) {
 
 func Normalize(file File) (Normalized, error) {
 	var out []Rule
+	var warnings []Warning
 	for _, rule := range file.Rules {
 		if err := validateRule(rule); err != nil {
 			return Normalized{}, err
@@ -180,13 +203,14 @@ func Normalize(file File) (Normalized, error) {
 		out = append(out, rule)
 	}
 	for _, imp := range file.Imports {
-		imported, err := loadImport(imp)
+		imported, skipped, err := loadImport(imp)
 		if err != nil {
 			return Normalized{}, err
 		}
 		out = append(out, imported...)
+		warnings = append(warnings, skipped...)
 	}
-	return Normalized{Rules: out}, nil
+	return Normalized{Rules: out, Warnings: warnings}, nil
 }
 
 func validateRule(rule Rule) error {
@@ -233,19 +257,19 @@ func (r Rule) Empty() bool {
 		len(r.IPCIDR) == 0 && len(r.RuleSet) == 0
 }
 
-func loadImport(imp Import) ([]Rule, error) {
+func loadImport(imp Import) ([]Rule, []Warning, error) {
 	if imp.Name == "" || imp.Type == "" {
-		return nil, errors.New("import name and type are required")
+		return nil, nil, errors.New("import name and type are required")
 	}
 	if (imp.Exit == "") == (imp.DNSPool == "") {
-		return nil, fmt.Errorf("import %q: exactly one of exit or dns_pool is required", imp.Name)
+		return nil, nil, fmt.Errorf("import %q: exactly one of exit or dns_pool is required", imp.Name)
 	}
 	if imp.DNSPool != "" && !validDNSPool(imp.DNSPool) {
-		return nil, fmt.Errorf("import %q: unsupported dns_pool %q", imp.Name, imp.DNSPool)
+		return nil, nil, fmt.Errorf("import %q: unsupported dns_pool %q", imp.Name, imp.DNSPool)
 	}
 	data, err := readImportData(imp)
 	if err != nil {
-		return nil, fmt.Errorf("import %q: %w", imp.Name, err)
+		return nil, nil, fmt.Errorf("import %q: %w", imp.Name, err)
 	}
 	switch strings.ToLower(imp.Type) {
 	case "sing-box", "singbox":
@@ -253,7 +277,7 @@ func loadImport(imp Import) ([]Rule, error) {
 	case "mihomo", "clash", "clash-meta", "mimoho":
 		return parseMihomo(imp, data)
 	default:
-		return nil, fmt.Errorf("import %q: unsupported type %q", imp.Name, imp.Type)
+		return nil, nil, fmt.Errorf("import %q: unsupported type %q", imp.Name, imp.Type)
 	}
 }
 
@@ -282,84 +306,132 @@ type singBoxRuleSet struct {
 	Rules   []Rule `json:"rules"`
 }
 
-func parseSingBox(imp Import, data []byte) ([]Rule, error) {
+func parseSingBox(imp Import, data []byte) ([]Rule, []Warning, error) {
 	var set singBoxRuleSet
 	if err := json.Unmarshal(data, &set); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(set.Rules) == 0 {
-		return nil, fmt.Errorf("import %q: no rules found", imp.Name)
+		return nil, nil, fmt.Errorf("import %q: no rules found", imp.Name)
 	}
 	out := make([]Rule, 0, len(set.Rules))
+	var warnings []Warning
 	for i, rule := range set.Rules {
 		rule.Name = fmt.Sprintf("%s-%d", imp.Name, i+1)
 		rule.Exit = imp.Exit
 		rule.DNSPool = imp.DNSPool
+		warnings = append(warnings, stripUnsupportedImportMatchers(imp.Name, &rule)...)
 		if rule.Empty() {
-			return nil, fmt.Errorf("import %q rule %d: no supported matchers", imp.Name, i+1)
+			warnings = append(warnings, Warning{
+				Import: imp.Name,
+				Rule:   rule.Name,
+				Detail: "no supported matchers left",
+			})
+			continue
 		}
 		if err := validateRule(rule); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		out = append(out, rule)
 	}
-	return out, nil
+	return out, warnings, nil
 }
 
 type mihomoProvider struct {
 	Payload []string `yaml:"payload"`
 }
 
-func parseMihomo(imp Import, data []byte) ([]Rule, error) {
+func parseMihomo(imp Import, data []byte) ([]Rule, []Warning, error) {
 	var provider mihomoProvider
 	if err := yaml.Unmarshal(data, &provider); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if len(provider.Payload) == 0 {
-		return nil, fmt.Errorf("import %q: empty payload", imp.Name)
+		return nil, nil, fmt.Errorf("import %q: empty payload", imp.Name)
 	}
 	rule := Rule{Name: imp.Name, Exit: imp.Exit, DNSPool: imp.DNSPool}
+	var warnings []Warning
 	for _, item := range provider.Payload {
-		if err := addMihomoPayload(&rule, item); err != nil {
-			return nil, fmt.Errorf("import %q: %w", imp.Name, err)
+		warning, err := addMihomoPayload(&rule, item)
+		if err != nil {
+			return nil, nil, fmt.Errorf("import %q: %w", imp.Name, err)
+		}
+		if warning != nil {
+			warnings = append(warnings, *warning)
 		}
 	}
 	if rule.Empty() {
-		return nil, fmt.Errorf("import %q: no supported matchers", imp.Name)
+		warnings = append(warnings, Warning{
+			Import: imp.Name,
+			Rule:   rule.Name,
+			Detail: "no supported matchers left",
+		})
+		return nil, warnings, nil
 	}
 	if err := validateRule(rule); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return []Rule{rule}, nil
+	return []Rule{rule}, warnings, nil
 }
 
-func addMihomoPayload(rule *Rule, item string) error {
+func stripUnsupportedImportMatchers(importName string, rule *Rule) []Warning {
+	matchers := []struct {
+		name   string
+		values []string
+		clear  func()
+	}{
+		{"domain_keyword", rule.DomainKeyword, func() { rule.DomainKeyword = nil }},
+		{"domain_regex", rule.DomainRegex, func() { rule.DomainRegex = nil }},
+		{"ip_cidr", rule.IPCIDR, func() { rule.IPCIDR = nil }},
+		{"rule_set", rule.RuleSet, func() { rule.RuleSet = nil }},
+	}
+	var warnings []Warning
+	for _, matcher := range matchers {
+		if len(matcher.values) == 0 {
+			continue
+		}
+		warnings = append(warnings, Warning{
+			Import:  importName,
+			Rule:    rule.Name,
+			Matcher: matcher.name,
+			Detail:  fmt.Sprintf("%d values are not supported by smartdns-rs rendering", len(matcher.values)),
+		})
+		matcher.clear()
+	}
+	return warnings
+}
+
+func addMihomoPayload(rule *Rule, item string) (*Warning, error) {
 	parts := strings.Split(item, ",")
 	if len(parts) < 2 {
-		return fmt.Errorf("invalid payload line %q", item)
+		return nil, fmt.Errorf("invalid payload line %q", item)
 	}
 	kind := strings.ToUpper(strings.TrimSpace(parts[0]))
 	value := strings.TrimSpace(parts[1])
 	if value == "" {
-		return fmt.Errorf("empty matcher in %q", item)
+		return nil, fmt.Errorf("empty matcher in %q", item)
 	}
 	switch kind {
 	case "DOMAIN":
 		rule.Domain = append(rule.Domain, value)
 	case "DOMAIN-SUFFIX":
 		rule.DomainSuffix = append(rule.DomainSuffix, value)
-	case "DOMAIN-KEYWORD":
-		rule.DomainKeyword = append(rule.DomainKeyword, value)
-	case "DOMAIN-REGEX":
-		rule.DomainRegex = append(rule.DomainRegex, value)
-	case "IP-CIDR", "IP-CIDR6":
-		rule.IPCIDR = append(rule.IPCIDR, value)
-	case "RULE-SET":
-		rule.RuleSet = append(rule.RuleSet, value)
 	case "DOMAIN-WILDCARD":
 		rule.DomainSuffix = append(rule.DomainSuffix, strings.TrimPrefix(value, "*."))
+	case "DOMAIN-KEYWORD", "DOMAIN-REGEX", "IP-CIDR", "IP-CIDR6", "RULE-SET":
+		return &Warning{
+			Import:  rule.Name,
+			Rule:    rule.Name,
+			Matcher: kind,
+			Detail:  fmt.Sprintf("%q is not supported by smartdns-rs rendering", value),
+		}, nil
 	default:
-		return fmt.Errorf("unsupported Mihomo matcher %q", kind)
+		return &Warning{
+			Import:  rule.Name,
+			Rule:    rule.Name,
+			Matcher: kind,
+			Detail:  fmt.Sprintf("%q is not supported by 5gws", value),
+		}, nil
 	}
-	return nil
+	return nil, nil
 }

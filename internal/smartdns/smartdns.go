@@ -59,8 +59,9 @@ type renderPlan struct {
 }
 
 func buildPlan(norm rules.Normalized) (renderPlan, error) {
-	seen := map[string]bool{}
+	gatewaySeen := map[string]bool{}
 	poolSeen := map[string]bool{}
+	decided := map[string]bool{}
 	var poolRules []dnsPoolRule
 	for _, rule := range norm.Rules {
 		if len(rule.DomainKeyword) > 0 || len(rule.DomainRegex) > 0 || len(rule.IPCIDR) > 0 || len(rule.RuleSet) > 0 {
@@ -68,19 +69,19 @@ func buildPlan(norm rules.Normalized) (renderPlan, error) {
 		}
 		for _, value := range rule.Domain {
 			domain := normalizeDomain(value)
-			if err := addDomainRule(rule, domain, seen, poolSeen, &poolRules); err != nil {
+			if err := addDomainRule(rule, domain, decided, gatewaySeen, poolSeen, &poolRules); err != nil {
 				return renderPlan{}, err
 			}
 		}
 		for _, value := range rule.DomainSuffix {
 			domain := normalizeDomain(value)
-			if err := addDomainRule(rule, domain, seen, poolSeen, &poolRules); err != nil {
+			if err := addDomainRule(rule, domain, decided, gatewaySeen, poolSeen, &poolRules); err != nil {
 				return renderPlan{}, err
 			}
 		}
 	}
-	gatewayDomains := make([]string, 0, len(seen))
-	for domain := range seen {
+	gatewayDomains := make([]string, 0, len(gatewaySeen))
+	for domain := range gatewaySeen {
 		gatewayDomains = append(gatewayDomains, domain)
 	}
 	sort.Strings(gatewayDomains)
@@ -93,38 +94,27 @@ func buildPlan(norm rules.Normalized) (renderPlan, error) {
 	return renderPlan{GatewayDomains: gatewayDomains, DNSPoolRules: poolRules}, nil
 }
 
-func addDomainRule(rule rules.Rule, domain string, gatewaySeen, poolSeen map[string]bool, poolRules *[]dnsPoolRule) error {
+func addDomainRule(rule rules.Rule, domain string, decided, gatewaySeen, poolSeen map[string]bool, poolRules *[]dnsPoolRule) error {
 	if domain == "" {
 		return fmt.Errorf("rule %q has empty domain matcher", rule.Name)
 	}
+	if decided[domain] {
+		return nil
+	}
 	if rule.DNSOnly() {
-		if gatewaySeen[domain] {
-			return nil
-		}
 		key := rule.DNSPool + "\x00" + domain
 		if !poolSeen[key] {
 			*poolRules = append(*poolRules, dnsPoolRule{Domain: domain, Pool: rule.DNSPool})
 			poolSeen[key] = true
 		}
+		decided[domain] = true
 		return nil
 	}
 	if rule.Gateway() {
 		gatewaySeen[domain] = true
-		removePoolRulesForDomain(domain, poolSeen, poolRules)
+		decided[domain] = true
 	}
 	return nil
-}
-
-func removePoolRulesForDomain(domain string, poolSeen map[string]bool, poolRules *[]dnsPoolRule) {
-	rules := (*poolRules)[:0]
-	for _, rule := range *poolRules {
-		if rule.Domain == domain {
-			delete(poolSeen, rule.Pool+"\x00"+rule.Domain)
-			continue
-		}
-		rules = append(rules, rule)
-	}
-	*poolRules = rules
 }
 
 func normalizeDomain(value string) string {

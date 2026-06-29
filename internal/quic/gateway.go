@@ -48,7 +48,12 @@ func Run(ctx context.Context, cfg config.Config, norm rules.Normalized) error {
 		return err
 	}
 	defer closeUDPProxies(proxies)
-	errCh := make(chan error, 1+len(proxies))
+	tcpProxies, err := listenTCPProxies(cfg)
+	if err != nil {
+		return err
+	}
+	defer closeTCPProxies(tcpProxies)
+	errCh := make(chan error, 1+len(proxies)+len(tcpProxies))
 	go gw.gc(ctx)
 	go func() {
 		errCh <- gw.serve(ctx)
@@ -56,6 +61,11 @@ func Run(ctx context.Context, cfg config.Config, norm rules.Normalized) error {
 	for _, proxy := range proxies {
 		go proxy.gc(ctx)
 		go func(proxy *UDPProxy) {
+			errCh <- proxy.serve(ctx)
+		}(proxy)
+	}
+	for _, proxy := range tcpProxies {
+		go func(proxy *TCPProxy) {
 			errCh <- proxy.serve(ctx)
 		}(proxy)
 	}
@@ -285,7 +295,7 @@ func readSocksAddr(r io.Reader) (string, int, error) {
 		return "", 0, fmt.Errorf("invalid SOCKS version %d", head[0])
 	}
 	if head[1] != 0x00 {
-		return "", 0, fmt.Errorf("SOCKS5 UDP associate failed with rep=%d", head[1])
+		return "", 0, fmt.Errorf("SOCKS5 request failed with rep=%d", head[1])
 	}
 	var host string
 	switch head[3] {

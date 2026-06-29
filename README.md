@@ -2,7 +2,7 @@
 
 面向运营商固定内网源 IP 场景的轻量 DNS/域名分流网关。
 
-客户端只配置系统 DNS/DoT，不安装代理客户端；服务端按域名规则和来源网段完成 DNS 分流，并接管内网来源的 DNS、TCP/80、TCP/443、UDP/443 和常见 STUN UDP 端口。
+客户端只配置系统 DNS/DoT，不安装代理客户端；服务端按域名规则和来源网段完成 DNS 分流，并接管内网来源的 DNS、TCP/80、TCP/443、UDP/443、Speedtest TCP 端口和常见 STUN UDP 端口。
 
 release 包保持精简，只包含：
 
@@ -45,10 +45,11 @@ release 包保持精简，只包含：
 - 内网来源未命中：走 `overseas_private` DNS pool。
 - 非内网来源 DoT：走 `overseas_public` DNS pool，不返回网关 IP。
 - TCP/QUIC 有 Host/SNI 但未命中规则：走 `routing.fallback_exit`。
+- Speedtest/Ookla 域名默认走 `overseas_private` DNS pool，常见 `8080/5060` TCP 测速端口由透明 TCP proxy 从服务端出口发起。
 - STUN 域名默认返回 `gateway_ip`，常见 `3478/19302` 端口由 UDP proxy 从服务端出口发起。
 - 缺 Host/SNI：拒绝，不做静默兜底。
 
-nftables 只 redirect 同时匹配 `network.ingress_iface` 和 `network.internal_cidr` 的 53/853/80/443 以及已配置的 STUN client port。5gws 不直接监听公网默认 `0.0.0.0:80/443`；高位 redirect 后端端口只允许内网来源访问，非内网来源访问默认 80/443 不受影响。
+nftables 只 redirect 同时匹配 `network.ingress_iface` 和 `network.internal_cidr` 的 53/853/80/443、已配置的 TCP proxy client port 以及 STUN client port。5gws 不直接监听公网默认 `0.0.0.0:80/443`；高位 redirect 后端端口只允许内网来源访问，非内网来源访问默认 80/443 不受影响。
 
 ## 快速开始
 
@@ -209,6 +210,23 @@ backend_resolvers = ["1.1.1.1:53", "1.0.0.1:53", "8.8.8.8:53", "8.8.4.4:53", "9.
 
 默认 `upstreams_overseas_private` 只使用 `22.22.22.22`；`upstreams_overseas_public` 和 `backend_resolvers` 使用主流公共 DNS 与 `22.22.22.22`。
 
+### Speedtest TCP Proxy
+
+默认内置两个 Speedtest TCP proxy，用于处理 Ookla app 常见测速端口。它们由 nft 透明重定向到 `5gws quicgw` 内置 TCP 代理，并通过 `SO_ORIGINAL_DST` 连接原始目标地址；因此默认规则不会把 Speedtest 域名改写为 `gateway_ip`。
+
+- 客户端 `tcp/8080`：本地监听 `18081`，转发到原始目标的 `8080`。
+- 客户端 `tcp/5060`：本地监听 `15060`，转发到原始目标的 `5060`。
+
+通常不需要写入配置；如需覆盖，必须提供完整列表：
+
+```toml
+[[tcp_proxies]]
+name = "speedtest-8080"
+client_port = 8080
+listen_port = 18081
+exit = "direct"
+```
+
 ### STUN UDP Proxy
 
 默认内置两个 STUN UDP proxy，用于处理常见 WebRTC/STUN 探测：
@@ -295,6 +313,12 @@ url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosi
 dns_pool = "cn"
 
 [[imports]]
+name = "speedtest"
+type = "sing-box"
+url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-speedtest.json"
+dns_pool = "overseas_private"
+
+[[imports]]
 name = "gfw"
 type = "sing-box"
 url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/gfw.json"
@@ -317,7 +341,7 @@ exit = "direct"
 
 - `dns_pool = "cn"`：DNS-only 规则，只影响 smartdns-rs 上游选择，不进入 HAProxy/quicgw。
 - `exit = "direct"` 或 `exit = "ss1"`：gateway 规则，内网 DNS 返回 `gateway_ip`，流量进入对应出口。
-- 同一域名同时命中 `exit` 和 `dns_pool` 时，`exit` 优先；手写 `[[rules]]` 先于 `[[imports]]` 处理，可用于覆盖导入规则。
+- 同一域名重复命中时，靠前规则优先；手写 `[[rules]]` 先于 `[[imports]]` 处理，可用于覆盖导入规则。
 
 手写规则：
 
@@ -343,7 +367,7 @@ exit = "ss1"
 - `type = "sing-box"`：source rule-set JSON，不直接消费二进制 `.srs`。
 - `type = "mihomo"` / `"mimoho"` / `"clash"` / `"clash-meta"`：rule-provider YAML。
 
-当前 smartdns-rs 渲染只等价支持 `domain` 和 `domain_suffix`。遇到 `domain_keyword`、`domain_regex`、`ip_cidr`、`rule_set` 会显式失败，避免静默丢规则。默认使用的 MetaCubeX `cn.json`、`gfw.json`、`category-ip-geo-detect.json` 和 `category-stun.json` 均可直接使用。
+当前 smartdns-rs 渲染只等价支持 `domain` 和 `domain_suffix`。导入 sing-box / Mihomo ruleset 时，`domain_keyword`、`domain_regex`、`ip_cidr`、`rule_set` 等无法等价渲染的 matcher 会被跳过，并在 `5gws apply/render/doctor` 输出 `warning`；手写 `[[rules]]` 仍然严格校验，避免误以为规则已生效。同一域名重复命中时，靠前规则优先。默认使用的 MetaCubeX `cn.json`、`category-speedtest.json`、`gfw.json`、`category-ip-geo-detect.json` 和 `category-stun.json` 均可直接使用。
 
 如果要扩大到 `geolocation-!cn`：
 

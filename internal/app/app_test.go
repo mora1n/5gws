@@ -266,6 +266,35 @@ func TestIOSLinkPrintsTerminalQRByDefault(t *testing.T) {
 	}
 }
 
+func TestRenderPrintsImportWarnings(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := writeIOSLinkConfigInDir(t, dir)
+	rulesPath := filepath.Join(dir, "rules.toml")
+	importPath := filepath.Join(dir, "ruleset.json")
+	mustWriteFile(t, importPath, `{"version":2,"rules":[{"domain_suffix":["ookla.com"],"domain_regex":"^speed\\.example$"}]}`)
+	mustWriteFile(t, rulesPath, `[[imports]]
+name = "speedtest"
+type = "sing-box"
+path = "`+filepath.ToSlash(importPath)+`"
+exit = "direct"
+`)
+	outDir := filepath.Join(dir, "rendered")
+	var out bytes.Buffer
+	if err := cmdRender([]string{"--config", cfgPath, "--rules", rulesPath, "--out", outDir}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "warning: skipped import speedtest") || !strings.Contains(out.String(), "domain_regex") {
+		t.Fatalf("missing import warning:\n%s", out.String())
+	}
+	smartdns, err := os.ReadFile(filepath.Join(outDir, "smartdns", "smartdns.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(smartdns), "address /ookla.com/10.0.0.1") {
+		t.Fatalf("rendered smartdns missing speedtest suffix:\n%s", smartdns)
+	}
+}
+
 func runApp(t *testing.T, args ...string) string {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
@@ -282,6 +311,13 @@ func runIOSLink(t *testing.T, args ...string) string {
 		t.Fatal(err)
 	}
 	return out.String()
+}
+
+func mustWriteFile(t *testing.T, path, text string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func writeIOSLinkConfig(t *testing.T) string {

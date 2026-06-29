@@ -47,26 +47,30 @@ func TestConfigRendersAddressRules(t *testing.T) {
 	}
 }
 
-func TestConfigGatewayRulesOverrideDNSPoolRules(t *testing.T) {
+func TestConfigUsesFirstDomainRule(t *testing.T) {
 	cases := []struct {
-		name  string
-		rules []rules.Rule
+		name           string
+		rules          []rules.Rule
+		wantAddress    bool
+		wantNameserver bool
 	}{
 		{
-			name: "gateway first",
+			name: "gateway before dns pool",
 			rules: []rules.Rule{
 				{Name: "manual-direct", Exit: "direct", DomainSuffix: []string{"ippure.com"}},
 				{Name: "imported-cn", DNSPool: "cn", DomainSuffix: []string{"ippure.com"}},
 				{Name: "imported-example", DNSPool: "cn", DomainSuffix: []string{"example.cn"}},
 			},
+			wantAddress: true,
 		},
 		{
-			name: "dns pool first",
+			name: "dns pool before gateway",
 			rules: []rules.Rule{
 				{Name: "imported-cn", DNSPool: "cn", DomainSuffix: []string{"ippure.com"}},
 				{Name: "manual-direct", Exit: "direct", DomainSuffix: []string{"ippure.com"}},
 				{Name: "imported-example", DNSPool: "cn", DomainSuffix: []string{"example.cn"}},
 			},
+			wantNameserver: true,
 		},
 	}
 
@@ -76,11 +80,13 @@ func TestConfigGatewayRulesOverrideDNSPoolRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(out, "address /ippure.com/10.0.0.1") {
-				t.Fatalf("missing gateway rewrite for ippure.com:\n%s", out)
+			hasAddress := strings.Contains(out, "address /ippure.com/10.0.0.1")
+			hasNameserver := strings.Contains(out, "nameserver /ippure.com/cn")
+			if hasAddress != tc.wantAddress {
+				t.Fatalf("gateway rewrite state for ippure.com = %t, want %t:\n%s", hasAddress, tc.wantAddress, out)
 			}
-			if strings.Contains(out, "nameserver /ippure.com/cn") {
-				t.Fatalf("dns_pool rule must not render for a gateway domain:\n%s", out)
+			if hasNameserver != tc.wantNameserver {
+				t.Fatalf("dns_pool state for ippure.com = %t, want %t:\n%s", hasNameserver, tc.wantNameserver, out)
 			}
 			if !strings.Contains(out, "nameserver /example.cn/cn") {
 				t.Fatalf("unrelated dns_pool rule must still render:\n%s", out)
