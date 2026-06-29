@@ -1,6 +1,9 @@
 package telegram
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,6 +76,127 @@ func TestRestartSkipsBotService(t *testing.T) {
 	}
 	if len(calls()) != 5 {
 		t.Fatalf("restart call count = %d, want 5: %#v", len(calls()), calls())
+	}
+}
+
+func TestGroupMessagesRequireExplicitMention(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want string
+		ok   bool
+	}{
+		{name: "plain text", text: "hello", ok: false},
+		{name: "bare command", text: "/status", ok: false},
+		{name: "other bot command", text: "/status@otherbot", ok: false},
+		{name: "command mention", text: "/status@fivegwsbot", want: "/status", ok: true},
+		{name: "leading mention", text: "@fivegwsbot /doctor", want: "/doctor", ok: true},
+		{name: "mention only", text: "@fivegwsbot", want: "/menu", ok: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := testTelegramMessage("supergroup", tc.text)
+			got, ok := messageCommandText(msg, "FiveGWSBot")
+			if ok != tc.ok || got != tc.want {
+				t.Fatalf("messageCommandText = %q/%t, want %q/%t", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
+func TestPrivateMessageDoesNotRequireMention(t *testing.T) {
+	got, ok := messageCommandText(testTelegramMessage("private", "/status"), "fivegwsbot")
+	if !ok || got != "/status" {
+		t.Fatalf("private message = %q/%t, want /status/true", got, ok)
+	}
+}
+
+func TestSendValuesIncludesMessageThread(t *testing.T) {
+	values, err := sendValues(100, 200, "hello", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values.Get("message_thread_id") != "200" {
+		t.Fatalf("message_thread_id = %q, want 200", values.Get("message_thread_id"))
+	}
+}
+
+func TestMenuHidesDangerousOperations(t *testing.T) {
+	text := menuText()
+	keyboard := menuKeyboard()
+	if strings.Contains(text, "/apply") || strings.Contains(text, "/restart") {
+		t.Fatalf("menu text exposes hidden operations:\n%s", text)
+	}
+	for _, row := range keyboard.InlineKeyboard {
+		for _, button := range row {
+			if strings.Contains(button.CallbackData, "apply") || strings.Contains(button.CallbackData, "restart") {
+				t.Fatalf("menu exposes dangerous callback: %#v", button)
+			}
+		}
+	}
+}
+
+func TestRuleAddAndDeleteManagedRule(t *testing.T) {
+	h := testRuleHandler(t, nil)
+	added := h.handleText("/rule_add example.com direct")
+	if !strings.Contains(added.Text, "added rule tg_example_com_direct") || added.Markup == nil {
+		t.Fatalf("add output missing confirmation:\n%#v", added)
+	}
+	data := readText(t, h.rulesPath)
+	for _, want := range []string{
+		managedRulesBegin,
+		`name = "tg_example_com_direct"`,
+		`exit = "direct"`,
+		`domain_suffix = ["example.com"]`,
+		`name = "manual"`,
+	} {
+		if !strings.Contains(data, want) {
+			t.Fatalf("rules.toml missing %q:\n%s", want, data)
+		}
+	}
+	list := h.handleText("/rule_list")
+	if !strings.Contains(list.Text, "tg_example_com_direct") {
+		t.Fatalf("rule list missing managed rule:\n%s", list.Text)
+	}
+	deleted := h.handleText("/rule_del tg_example_com_direct")
+	if !strings.Contains(deleted.Text, "deleted rule tg_example_com_direct") {
+		t.Fatalf("delete output missing rule:\n%s", deleted.Text)
+	}
+	data = readText(t, h.rulesPath)
+	if strings.Contains(data, managedRulesBegin) || !strings.Contains(data, `name = "manual"`) {
+		t.Fatalf("managed block not removed or manual rule lost:\n%s", data)
+	}
+	backups, err := filepath.Glob(h.rulesPath + ".botbak-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backups) < 2 {
+		t.Fatalf("backup count = %d, want at least 2", len(backups))
+	}
+}
+
+func TestRuleAddSupportsDNSPoolTarget(t *testing.T) {
+	h := testRuleHandler(t, nil)
+	out := h.handleText("/rule_add speedtest.net pool:overseas_private")
+	if !strings.Contains(out.Text, "added rule tg_speedtest_net_pool_overseas_private") {
+		t.Fatalf("add pool output:\n%s", out.Text)
+	}
+	data := readText(t, h.rulesPath)
+	if !strings.Contains(data, `dns_pool = "overseas_private"`) {
+		t.Fatalf("rules.toml missing dns_pool:\n%s", data)
+	}
+}
+
+func TestRuleAddRestoresBackupWhenDoctorFails(t *testing.T) {
+	h := testRuleHandler(t, errors.New("doctor failed"))
+	before := readText(t, h.rulesPath)
+	out := h.handleText("/rule_add example.com direct")
+	if !strings.Contains(out.Text, "doctor failed") {
+		t.Fatalf("expected doctor failure:\n%s", out.Text)
+	}
+	after := readText(t, h.rulesPath)
+	if after != before {
+		t.Fatalf("rules.toml was not restored:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
 
@@ -171,4 +295,43 @@ func testHandler() (handler, func() [][]string) {
 	return h, func() [][]string {
 		return calls
 	}
+}
+
+func testTelegramMessage(chatType, text string) telegramMessage {
+	msg := telegramMessage{Text: text}
+	msg.Chat.Type = chatType
+	return msg
+}
+
+func testRuleHandler(t *testing.T, checkErr error) handler {
+	t.Helper()
+	dir := t.TempDir()
+	rulesPath := filepath.Join(dir, "rules.toml")
+	if err := os.WriteFile(rulesPath, []byte(`[[rules]]
+name = "manual"
+exit = "direct"
+domain_suffix = ["manual.example"]
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newHandler(filepath.Join(dir, "config.toml"), rulesPath)
+	h.loadConfig = func() (config.Config, error) {
+		return config.Config{Exits: []config.ExitConfig{{Name: "direct", Type: "direct"}}}, nil
+	}
+	h.checkedRunner = func(name string, args ...string) (string, error) {
+		if checkErr != nil {
+			return "doctor output", checkErr
+		}
+		return "ok", nil
+	}
+	return h
+}
+
+func readText(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }

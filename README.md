@@ -461,6 +461,8 @@ BOT_TOKEN=...
 
 生产环境建议填写 `allowed_users`。为空时 bot 会允许所有 Telegram 用户。
 
+在 group / topic 中，bot 只响应显式 @ 它的消息，例如 `/status@your_bot` 或 `@your_bot /status`；普通聊天消息不会触发回复。
+
 bot 支持命令和按钮菜单：
 
 ```text
@@ -470,10 +472,13 @@ bot 支持命令和按钮菜单：
 /ios     输出 iOS 描述文件链接
 /config  查看配置摘要，隐藏密码
 /rules   查看 rules.toml 摘要，不下载远程 ruleset
+/rule_list  查看 Telegram 管理的规则
+/rule_add <domain> <exit|pool:name>  添加 Telegram 管理规则
+/rule_del <name>  删除 Telegram 管理规则
 /logs    查看运行日志，默认 60 行
-/apply   应用配置，需要按钮二次确认
-/restart 重启运行服务，需要按钮二次确认
 ```
+
+`/rule_add` 写入 `rules.toml` 中的 Telegram managed block，只管理该 block 内规则，不改手写规则和 imports。写入前会备份，写入后运行 `doctor` 校验；通过后 bot 会显示“确认应用”按钮，点击后执行 `apply --skip-bot-restart`。`/apply` 和 `/restart` 仍可作为隐藏高级命令使用，但不显示在主菜单。
 
 ## 注意事项
 

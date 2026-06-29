@@ -18,10 +18,11 @@ import (
 )
 
 type Bot struct {
-	token   string
-	allowed map[int64]bool
-	client  http.Client
-	handler handler
+	token    string
+	username string
+	allowed  map[int64]bool
+	client   http.Client
+	handler  handler
 }
 
 type update struct {
@@ -31,10 +32,12 @@ type update struct {
 }
 
 type telegramMessage struct {
-	MessageID int64  `json:"message_id"`
-	Text      string `json:"text"`
-	Chat      struct {
-		ID int64 `json:"id"`
+	MessageID       int64  `json:"message_id"`
+	MessageThreadID int64  `json:"message_thread_id"`
+	Text            string `json:"text"`
+	Chat            struct {
+		ID   int64  `json:"id"`
+		Type string `json:"type"`
 	} `json:"chat"`
 	From struct {
 		ID int64 `json:"id"`
@@ -49,12 +52,18 @@ type callbackQuery struct {
 }
 
 type telegramUser struct {
-	ID int64 `json:"id"`
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
 }
 
 type updateResponse struct {
 	OK     bool     `json:"ok"`
 	Result []update `json:"result"`
+}
+
+type getMeResponse struct {
+	OK     bool         `json:"ok"`
+	Result telegramUser `json:"result"`
 }
 
 type inlineKeyboard struct {
@@ -92,6 +101,11 @@ func Run(ctx context.Context, cfg config.Config, cfgPath, rulesPath string) erro
 		client:  http.Client{Timeout: 30 * time.Second},
 		handler: newHandler(cfgPath, rulesPath),
 	}
+	me, err := bot.getMe()
+	if err != nil {
+		return err
+	}
+	bot.username = me.Username
 	return bot.loop(ctx)
 }
 
@@ -122,14 +136,21 @@ func (b Bot) loop(ctx context.Context) error {
 }
 
 func (b Bot) handleMessage(message telegramMessage) {
+	text, ok := messageCommandText(message, b.username)
+	if !ok {
+		return
+	}
 	if !b.isAllowed(message.From.ID) {
-		if err := b.send(message.Chat.ID, "forbidden", nil); err != nil {
+		if isGroupChat(message.Chat.Type) {
+			return
+		}
+		if err := b.send(message.Chat.ID, message.MessageThreadID, "forbidden", nil); err != nil {
 			log.Printf("telegram send forbidden: %v", err)
 		}
 		return
 	}
-	resp := b.handler.handleText(message.Text)
-	if err := b.send(message.Chat.ID, resp.Text, resp.Markup); err != nil {
+	resp := b.handler.handleText(text)
+	if err := b.send(message.Chat.ID, message.MessageThreadID, resp.Text, resp.Markup); err != nil {
 		log.Printf("telegram send: %v", err)
 	}
 }
@@ -156,7 +177,7 @@ func (b Bot) handleCallback(query callbackQuery) {
 	resp := b.handler.handleCallback(query.Data)
 	if err := b.edit(query.Message.Chat.ID, query.Message.MessageID, resp.Text, resp.Markup); err != nil {
 		log.Printf("telegram edit: %v", err)
-		if err := b.send(query.Message.Chat.ID, resp.Text, resp.Markup); err != nil {
+		if err := b.send(query.Message.Chat.ID, query.Message.MessageThreadID, resp.Text, resp.Markup); err != nil {
 			log.Printf("telegram send after edit failed: %v", err)
 		}
 	}
@@ -175,15 +196,26 @@ func callbackNeedsProgress(data string) bool {
 	}
 }
 
-func (b Bot) send(chatID int64, text string, markup *inlineKeyboard) error {
-	values := url.Values{}
-	values.Set("chat_id", strconv.FormatInt(chatID, 10))
-	values.Set("text", truncateText(text))
-	values.Set("disable_web_page_preview", "true")
-	if err := setMarkup(values, markup); err != nil {
+func (b Bot) send(chatID, threadID int64, text string, markup *inlineKeyboard) error {
+	values, err := sendValues(chatID, threadID, text, markup)
+	if err != nil {
 		return err
 	}
 	return b.postForm("sendMessage", values)
+}
+
+func sendValues(chatID, threadID int64, text string, markup *inlineKeyboard) (url.Values, error) {
+	values := url.Values{}
+	values.Set("chat_id", strconv.FormatInt(chatID, 10))
+	if threadID > 0 {
+		values.Set("message_thread_id", strconv.FormatInt(threadID, 10))
+	}
+	values.Set("text", truncateText(text))
+	values.Set("disable_web_page_preview", "true")
+	if err := setMarkup(values, markup); err != nil {
+		return nil, err
+	}
+	return values, nil
 }
 
 func (b Bot) edit(chatID, messageID int64, text string, markup *inlineKeyboard) error {
@@ -252,6 +284,73 @@ func (b Bot) getUpdates(offset int64) (updateResponse, error) {
 		return updateResponse{}, errors.New("telegram getUpdates returned ok=false")
 	}
 	return updates, nil
+}
+
+func (b Bot) getMe() (telegramUser, error) {
+	endpoint := fmt.Sprintf("https://api.telegram.org/bot%s/getMe", b.token)
+	resp, err := b.client.Get(endpoint)
+	if err != nil {
+		return telegramUser{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return telegramUser{}, fmt.Errorf("telegram getMe failed: %s", resp.Status)
+	}
+	var out getMeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return telegramUser{}, err
+	}
+	if !out.OK {
+		return telegramUser{}, errors.New("telegram getMe returned ok=false")
+	}
+	if strings.TrimSpace(out.Result.Username) == "" {
+		return telegramUser{}, errors.New("telegram getMe returned empty username")
+	}
+	return out.Result, nil
+}
+
+func messageCommandText(message telegramMessage, username string) (string, bool) {
+	text := strings.TrimSpace(message.Text)
+	if !isGroupChat(message.Chat.Type) {
+		return text, true
+	}
+	return directedGroupText(text, username)
+}
+
+func directedGroupText(text, username string) (string, bool) {
+	username = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(username), "@"))
+	if text == "" || username == "" {
+		return "", false
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return "", false
+	}
+	first := fields[0]
+	if strings.HasPrefix(first, "/") {
+		cmd, mention, hasMention := strings.Cut(first, "@")
+		if !hasMention || !strings.EqualFold(mention, username) {
+			return "", false
+		}
+		fields[0] = cmd
+		return strings.Join(fields, " "), true
+	}
+	if strings.HasPrefix(first, "@") && strings.EqualFold(strings.TrimPrefix(first, "@"), username) {
+		if len(fields) == 1 {
+			return "/menu", true
+		}
+		return strings.Join(fields[1:], " "), true
+	}
+	return "", false
+}
+
+func isGroupChat(chatType string) bool {
+	switch chatType {
+	case "group", "supergroup":
+		return true
+	default:
+		return false
+	}
 }
 
 func readEnv(path string) (map[string]string, error) {

@@ -19,14 +19,16 @@ const (
 )
 
 type runnerFunc func(name string, args ...string) string
+type checkedRunnerFunc func(name string, args ...string) (string, error)
 
 type handler struct {
-	binary     string
-	configPath string
-	rulesPath  string
-	runner     runnerFunc
-	loadConfig func() (config.Config, error)
-	loadRules  func() (rules.File, error)
+	binary        string
+	configPath    string
+	rulesPath     string
+	runner        runnerFunc
+	checkedRunner checkedRunnerFunc
+	loadConfig    func() (config.Config, error)
+	loadRules     func() (rules.File, error)
 }
 
 func newHandler(cfgPath, rulesPath string) handler {
@@ -36,6 +38,7 @@ func newHandler(cfgPath, rulesPath string) handler {
 		rulesPath:  rulesPath,
 		runner:     runCommand,
 	}
+	h.checkedRunner = runCommandChecked
 	h.loadConfig = func() (config.Config, error) {
 		return config.Load(h.configPath)
 	}
@@ -65,6 +68,12 @@ func (h handler) handleText(text string) botResponse {
 		return outputResponse(h.configSummary())
 	case "/rules":
 		return outputResponse(h.rulesSummary())
+	case "/rule_list":
+		return outputResponse(h.managedRulesSummary())
+	case "/rule_add":
+		return h.handleRuleAdd(args)
+	case "/rule_del":
+		return h.handleRuleDel(args)
 	case "/logs":
 		return outputResponse(h.logs(parseLogLines(args)))
 	case "/apply":
@@ -90,6 +99,8 @@ func (h handler) handleCallback(data string) botResponse {
 		return h.handleText("/config")
 	case "cmd:rules":
 		return h.handleText("/rules")
+	case "cmd:rule_list":
+		return h.handleText("/rule_list")
 	case "cmd:logs":
 		return h.handleText("/logs")
 	case "ask:apply":
@@ -128,17 +139,18 @@ func menuText() string {
 /ios     iOS 描述文件链接
 /config  配置摘要
 /rules   规则摘要
+/rule_list  Telegram 管理规则
+/rule_add <domain> <exit|pool:name>  添加规则
+/rule_del <name>  删除 Telegram 管理规则
 /logs    运行日志
-/apply   应用配置，需要确认
-/restart 重启运行服务，需要确认`
+`
 }
 
 func menuKeyboard() *inlineKeyboard {
 	return &inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "状态", CallbackData: "cmd:status"}, {Text: "自检", CallbackData: "cmd:doctor"}},
 		{{Text: "iOS 链接", CallbackData: "cmd:ios"}, {Text: "配置", CallbackData: "cmd:config"}, {Text: "规则", CallbackData: "cmd:rules"}},
-		{{Text: "日志", CallbackData: "cmd:logs"}},
-		{{Text: "应用配置", CallbackData: "ask:apply"}, {Text: "重启服务", CallbackData: "ask:restart"}},
+		{{Text: "规则编辑", CallbackData: "cmd:rule_list"}, {Text: "日志", CallbackData: "cmd:logs"}},
 	}}
 }
 
@@ -208,16 +220,24 @@ func truncateText(text string) string {
 }
 
 func runCommand(name string, args ...string) string {
+	out, err := runCommandChecked(name, args...)
+	if err != nil {
+		if out == "" {
+			return err.Error()
+		}
+		return out + "\n" + err.Error()
+	}
+	return out
+}
+
+func runCommandChecked(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
 	if err := cmd.Run(); err != nil {
 		out := strings.TrimSpace(buf.String())
-		if out == "" {
-			return err.Error()
-		}
-		return out + "\n" + err.Error()
+		return out, err
 	}
-	return strings.TrimSpace(buf.String())
+	return strings.TrimSpace(buf.String()), nil
 }
