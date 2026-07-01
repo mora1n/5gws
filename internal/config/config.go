@@ -41,6 +41,8 @@ type NetworkConfig struct {
 	HTTPRedirectPort  int    `toml:"http_redirect_port"`
 	HTTPSRedirectPort int    `toml:"https_redirect_port"`
 	QUICRedirectPort  int    `toml:"quic_redirect_port"`
+	TCPRedirectPort   int    `toml:"tcp_redirect_port"`
+	QUICPolicy        string `toml:"quic_policy"`
 }
 
 type RoutingConfig struct {
@@ -158,19 +160,19 @@ func (c *Config) ApplyDefaults() {
 	if c.Network.QUICRedirectPort == 0 {
 		c.Network.QUICRedirectPort = 18443
 	}
+	if c.Network.TCPRedirectPort == 0 {
+		c.Network.TCPRedirectPort = 18082
+	}
+	if c.Network.QUICPolicy == "" {
+		c.Network.QUICPolicy = "reject"
+	}
 	if c.Routing.FallbackExit == "" {
 		c.Routing.FallbackExit = "direct"
-	}
-	if len(c.TCPProxies) == 0 {
-		c.TCPProxies = DefaultTCPProxies()
 	}
 	for i := range c.TCPProxies {
 		if c.TCPProxies[i].Exit == "" {
 			c.TCPProxies[i].Exit = "direct"
 		}
-	}
-	if len(c.UDPProxies) == 0 {
-		c.UDPProxies = DefaultUDPProxies()
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
@@ -266,6 +268,9 @@ func (c Config) Validate() error {
 	if c.Network.IngressIface == "" {
 		return errors.New("network.ingress_iface is required")
 	}
+	if err := validateNetwork(c.Network); err != nil {
+		return err
+	}
 	if len(c.Exits) == 0 {
 		return errors.New("at least one [[exits]] entry is required")
 	}
@@ -298,38 +303,29 @@ func (c Config) Validate() error {
 }
 
 func DefaultTCPProxies() []TCPProxyConfig {
-	return []TCPProxyConfig{
-		{
-			Name:       "speedtest-8080",
-			ClientPort: 8080,
-			ListenPort: 18081,
-			Exit:       "direct",
-		},
-		{
-			Name:       "speedtest-5060",
-			ClientPort: 5060,
-			ListenPort: 15060,
-			Exit:       "direct",
-		},
-	}
+	return nil
 }
 
 func DefaultUDPProxies() []UDPProxyConfig {
-	return []UDPProxyConfig{
-		{
-			Name:       "stun-3478",
-			ClientPort: 3478,
-			ListenPort: 13478,
-			Target:     "stun.cloudflare.com:3478",
-			Exit:       "direct",
-		},
-		{
-			Name:       "stun-19302",
-			ClientPort: 19302,
-			ListenPort: 13902,
-			Target:     "stun.l.google.com:19302",
-			Exit:       "direct",
-		},
+	return nil
+}
+
+func validateNetwork(n NetworkConfig) error {
+	for field, port := range map[string]int{
+		"network.http_redirect_port":  n.HTTPRedirectPort,
+		"network.https_redirect_port": n.HTTPSRedirectPort,
+		"network.quic_redirect_port":  n.QUICRedirectPort,
+		"network.tcp_redirect_port":   n.TCPRedirectPort,
+	} {
+		if err := validatePort(field, port); err != nil {
+			return err
+		}
+	}
+	switch n.QUICPolicy {
+	case "reject", "proxy":
+		return nil
+	default:
+		return fmt.Errorf("network.quic_policy must be reject or proxy: %q", n.QUICPolicy)
 	}
 }
 
@@ -497,6 +493,7 @@ func reservedTCPPorts(cfg Config) map[int]string {
 		443:                           "built-in tcp/443 redirect",
 		cfg.Network.HTTPRedirectPort:  "network.http_redirect_port",
 		cfg.Network.HTTPSRedirectPort: "network.https_redirect_port",
+		cfg.Network.TCPRedirectPort:   "network.tcp_redirect_port",
 	}
 	for field, addr := range map[string]string{
 		"dns.listen_tcp":        cfg.DNS.ListenTCP,

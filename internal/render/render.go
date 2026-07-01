@@ -124,24 +124,29 @@ func HAProxy(cfg config.Config, norm rules.Normalized) string {
 func NFTables(cfg config.Config) string {
 	dnsUDPPort := mustPort(cfg.DNS.ListenUDP)
 	udpProxies := buildUDPProxyViews(cfg.UDPProxies)
+	quicProxy := cfg.Network.QUICPolicy == "proxy"
 	data := struct {
-		Config            config.Config
-		DNSUDPPort        int
-		DNSTCPPort        int
-		DNSDOTPort        int
-		TCPProxies        []tcpProxyView
-		UDPProxies        []udpProxyView
-		ProtectedTCPPorts string
-		ProtectedUDPPorts string
+		Config                  config.Config
+		DNSUDPPort              int
+		DNSTCPPort              int
+		DNSDOTPort              int
+		QUICProxy               bool
+		TCPGatewayExcludedPorts string
+		TCPProxies              []tcpProxyView
+		UDPProxies              []udpProxyView
+		ProtectedTCPPorts       string
+		ProtectedUDPPorts       string
 	}{
-		Config:            cfg,
-		DNSUDPPort:        dnsUDPPort,
-		DNSTCPPort:        mustPort(cfg.DNS.ListenTCP),
-		DNSDOTPort:        mustPort(cfg.DNS.ListenDOT),
-		TCPProxies:        buildTCPProxyViews(cfg.TCPProxies),
-		UDPProxies:        udpProxies,
-		ProtectedTCPPorts: joinInts(uniqueInts(append([]int{mustPort(cfg.DNS.ListenTCP), mustPort(cfg.DNS.ListenDOT), cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort}, tcpProxyListenPorts(cfg.TCPProxies)...))),
-		ProtectedUDPPorts: joinInts(uniqueInts(append([]int{dnsUDPPort, cfg.Network.QUICRedirectPort}, udpProxyListenPorts(udpProxies)...))),
+		Config:                  cfg,
+		DNSUDPPort:              dnsUDPPort,
+		DNSTCPPort:              mustPort(cfg.DNS.ListenTCP),
+		DNSDOTPort:              mustPort(cfg.DNS.ListenDOT),
+		QUICProxy:               quicProxy,
+		TCPGatewayExcludedPorts: joinInts(tcpGatewayExcludedPorts(cfg)),
+		TCPProxies:              buildTCPProxyViews(cfg.TCPProxies),
+		UDPProxies:              udpProxies,
+		ProtectedTCPPorts:       joinInts(protectedTCPPorts(cfg)),
+		ProtectedUDPPorts:       joinInts(protectedUDPPorts(cfg, udpProxies, quicProxy)),
 	}
 	return mustExecute(nftTemplate, data)
 }
@@ -238,6 +243,47 @@ func udpProxyListenPorts(proxies []udpProxyView) []int {
 		ports = append(ports, proxy.ListenPort)
 	}
 	return ports
+}
+
+func tcpGatewayExcludedPorts(cfg config.Config) []int {
+	ports := []int{
+		53,
+		80,
+		443,
+		mustPort(cfg.DNS.ListenTCP),
+		mustPort(cfg.DNS.ListenDOT),
+		cfg.Network.HTTPRedirectPort,
+		cfg.Network.HTTPSRedirectPort,
+		cfg.Network.TCPRedirectPort,
+	}
+	if cfg.DNS.ListenPublicDOT != "" {
+		ports = append(ports, mustPort(cfg.DNS.ListenPublicDOT))
+	}
+	for _, proxy := range cfg.TCPProxies {
+		ports = append(ports, proxy.ClientPort, proxy.ListenPort)
+	}
+	return uniqueInts(ports)
+}
+
+func protectedTCPPorts(cfg config.Config) []int {
+	ports := []int{
+		mustPort(cfg.DNS.ListenTCP),
+		mustPort(cfg.DNS.ListenDOT),
+		cfg.Network.HTTPRedirectPort,
+		cfg.Network.HTTPSRedirectPort,
+		cfg.Network.TCPRedirectPort,
+	}
+	ports = append(ports, tcpProxyListenPorts(cfg.TCPProxies)...)
+	return uniqueInts(ports)
+}
+
+func protectedUDPPorts(cfg config.Config, udpProxies []udpProxyView, quicProxy bool) []int {
+	ports := []int{mustPort(cfg.DNS.ListenUDP)}
+	if quicProxy {
+		ports = append(ports, cfg.Network.QUICRedirectPort)
+	}
+	ports = append(ports, udpProxyListenPorts(udpProxies)...)
+	return uniqueInts(ports)
 }
 
 func uniqueInts(values []int) []int {
@@ -437,17 +483,23 @@ table inet fivegws {
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 853 counter redirect to :{{ .DNSDOTPort }}
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 80 counter redirect to :{{ .Config.Network.HTTPRedirectPort }}
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 443 counter redirect to :{{ .Config.Network.HTTPSRedirectPort }}
+{{- if .QUICProxy }}
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport 443 counter redirect to :{{ .Config.Network.QUICRedirectPort }}
+{{- end }}
 {{- range .TCPProxies }}
         iifname {{ quote $.Config.Network.IngressIface }} ip saddr {{ $.Config.Network.InternalCIDR }} tcp dport {{ .ClientPort }} counter redirect to :{{ .ListenPort }}
 {{- end }}
 {{- range .UDPProxies }}
         iifname {{ quote $.Config.Network.IngressIface }} ip saddr {{ $.Config.Network.InternalCIDR }} udp dport {{ .ClientPort }} counter redirect to :{{ .ListenPort }}
 {{- end }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} ip daddr {{ .Config.Network.GatewayIP }} tcp dport != { {{ .TCPGatewayExcludedPorts }} } counter redirect to :{{ .Config.Network.TCPRedirectPort }}
     }
 
     chain input {
         type filter hook input priority filter; policy accept;
+{{- if not .QUICProxy }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} ip daddr {{ .Config.Network.GatewayIP }} udp dport 443 counter reject
+{{- end }}
         iifname {{ quote .Config.Network.IngressIface }} ip saddr != {{ .Config.Network.InternalCIDR }} udp dport { {{ .ProtectedUDPPorts }} } drop
         iifname {{ quote .Config.Network.IngressIface }} ip saddr != {{ .Config.Network.InternalCIDR }} tcp dport { {{ .ProtectedTCPPorts }} } reject with tcp reset
     }

@@ -101,29 +101,17 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	if !cfg.Logging.AccessEnabled() {
 		t.Fatal("logging access should default to true")
 	}
-	wantTCPProxies := []TCPProxyConfig{
-		{Name: "speedtest-8080", ClientPort: 8080, ListenPort: 18081, Exit: "direct"},
-		{Name: "speedtest-5060", ClientPort: 5060, ListenPort: 15060, Exit: "direct"},
+	if cfg.Network.TCPRedirectPort != 18082 {
+		t.Fatalf("tcp_redirect_port = %d, want 18082", cfg.Network.TCPRedirectPort)
 	}
-	if len(cfg.TCPProxies) != len(wantTCPProxies) {
-		t.Fatalf("tcp proxy count = %d, want %d", len(cfg.TCPProxies), len(wantTCPProxies))
+	if cfg.Network.QUICPolicy != "reject" {
+		t.Fatalf("quic_policy = %q, want reject", cfg.Network.QUICPolicy)
 	}
-	for i := range wantTCPProxies {
-		if cfg.TCPProxies[i] != wantTCPProxies[i] {
-			t.Fatalf("tcp proxy %d = %#v, want %#v", i, cfg.TCPProxies[i], wantTCPProxies[i])
-		}
+	if len(cfg.TCPProxies) != 0 {
+		t.Fatalf("tcp proxy count = %d, want 0", len(cfg.TCPProxies))
 	}
-	wantUDPProxies := []UDPProxyConfig{
-		{Name: "stun-3478", ClientPort: 3478, ListenPort: 13478, Target: "stun.cloudflare.com:3478", Exit: "direct"},
-		{Name: "stun-19302", ClientPort: 19302, ListenPort: 13902, Target: "stun.l.google.com:19302", Exit: "direct"},
-	}
-	if len(cfg.UDPProxies) != len(wantUDPProxies) {
-		t.Fatalf("udp proxy count = %d, want %d", len(cfg.UDPProxies), len(wantUDPProxies))
-	}
-	for i := range wantUDPProxies {
-		if cfg.UDPProxies[i] != wantUDPProxies[i] {
-			t.Fatalf("udp proxy %d = %#v, want %#v", i, cfg.UDPProxies[i], wantUDPProxies[i])
-		}
+	if len(cfg.UDPProxies) != 0 {
+		t.Fatalf("udp proxy count = %d, want 0", len(cfg.UDPProxies))
 	}
 }
 
@@ -132,6 +120,14 @@ func TestValidateRejectsInvalidLoggingLevel(t *testing.T) {
 	cfg.Logging.Level = "trace"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected invalid logging level to be rejected")
+	}
+}
+
+func TestValidateRejectsInvalidQUICPolicy(t *testing.T) {
+	cfg := validConfig()
+	cfg.Network.QUICPolicy = "auto"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid quic policy to be rejected")
 	}
 }
 
@@ -234,7 +230,7 @@ func TestValidateRejectsTCPProxyListenPortConflict(t *testing.T) {
 	cfg.TCPProxies = []TCPProxyConfig{{
 		Name:       "bad",
 		ClientPort: 8080,
-		ListenPort: cfg.Network.HTTPRedirectPort,
+		ListenPort: cfg.Network.TCPRedirectPort,
 		Exit:       "direct",
 	}}
 	if err := cfg.Validate(); err == nil {

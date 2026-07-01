@@ -615,6 +615,10 @@ func encodeConfig(cfg config.Config) (string, error) {
 	writeNonZeroInt(&b, "http_redirect_port", cfg.Network.HTTPRedirectPort, 18080)
 	writeNonZeroInt(&b, "https_redirect_port", cfg.Network.HTTPSRedirectPort, 18443)
 	writeNonZeroInt(&b, "quic_redirect_port", cfg.Network.QUICRedirectPort, 18443)
+	writeNonZeroInt(&b, "tcp_redirect_port", cfg.Network.TCPRedirectPort, 18082)
+	if cfg.Network.QUICPolicy != "" && cfg.Network.QUICPolicy != "reject" {
+		fmt.Fprintf(&b, "quic_policy = %q\n", cfg.Network.QUICPolicy)
+	}
 	fmt.Fprintf(&b, "\n[routing]\nfallback_exit = %q\n", cfg.Routing.FallbackExit)
 	fmt.Fprintf(&b, "\n[dns]\ndot_domain = %q\ncert_file = %q\nkey_file = %q\n", cfg.DNS.DOTDomain, cfg.DNS.CertFile, cfg.DNS.KeyFile)
 	writeStringSlice(&b, "backend_resolvers", cfg.DNS.BackendResolvers, nil)
@@ -917,16 +921,16 @@ domain = [
 ]
 
 [[imports]]
+name = "speedtest"
+type = "sing-box"
+url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-speedtest.json"
+exit = "direct"
+
+[[imports]]
 name = "cn"
 type = "sing-box"
 url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.json"
 dns_pool = "cn"
-
-[[imports]]
-name = "speedtest"
-type = "sing-box"
-url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-speedtest.json"
-dns_pool = "overseas_private"
 
 [[imports]]
 name = "gfw"
@@ -990,7 +994,7 @@ func printInstallSummary(w io.Writer, cfg config.Config, norm rules.Normalized) 
 	fmt.Fprintf(w, "config_dir: %s\nstate_dir: %s\n", cfg.System.ConfigDir, cfg.System.StateDir)
 	fmt.Fprintf(w, "internal_cidr: %s via %s\n", cfg.Network.InternalCIDR, cfg.Network.IngressIface)
 	fmt.Fprintf(w, "dot_domain: %s\n", cfg.DNS.DOTDomain)
-	fmt.Fprintf(w, "redirect: tcp/80->%d tcp/443->%d udp/443->%d\n", cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort, cfg.Network.QUICRedirectPort)
+	fmt.Fprintf(w, "redirect: tcp/80->%d tcp/443->%d tcp/gateway-other->%d udp/443=%s\n", cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort, cfg.Network.TCPRedirectPort, cfg.Network.QUICPolicy)
 	for _, proxy := range cfg.TCPProxies {
 		fmt.Fprintf(w, "tcp_proxy: tcp/%d->%d exit=%s\n", proxy.ClientPort, proxy.ListenPort, proxy.Exit)
 	}

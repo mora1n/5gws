@@ -38,25 +38,37 @@ type packetConn interface {
 }
 
 func Run(ctx context.Context, cfg config.Config, norm rules.Normalized) error {
-	gw, err := listenQUICGateway(cfg, norm)
-	if err != nil {
-		return err
-	}
-	defer gw.listener.Close()
 	proxies, err := listenUDPProxies(cfg)
 	if err != nil {
 		return err
 	}
 	defer closeUDPProxies(proxies)
+	tcpGateway, err := listenTCPGateway(cfg, norm)
+	if err != nil {
+		return err
+	}
+	defer tcpGateway.close()
 	tcpProxies, err := listenTCPProxies(cfg)
 	if err != nil {
 		return err
 	}
 	defer closeTCPProxies(tcpProxies)
-	errCh := make(chan error, 1+len(proxies)+len(tcpProxies))
-	go gw.gc(ctx)
+	errCh := make(chan error, 2+len(proxies)+len(tcpProxies))
+	if cfg.Network.QUICPolicy == "proxy" {
+		gw, err := listenQUICGateway(cfg, norm)
+		if err != nil {
+			return err
+		}
+		defer gw.listener.Close()
+		go gw.gc(ctx)
+		go func() {
+			errCh <- gw.serve(ctx)
+		}()
+	} else {
+		log.Printf("quic gateway disabled by quic_policy=%s", cfg.Network.QUICPolicy)
+	}
 	go func() {
-		errCh <- gw.serve(ctx)
+		errCh <- tcpGateway.serve(ctx)
 	}()
 	for _, proxy := range proxies {
 		go proxy.gc(ctx)

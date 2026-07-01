@@ -2,42 +2,27 @@
 gateway_ip = "10.0.0.1"
 internal_cidr = "172.22.0.0/16"
 ingress_iface = "eth0"
+# tcp_redirect_port = 18082
+# quic_policy = "reject" # reject | proxy
 
 [routing]
 fallback_exit = "direct"
 
-# 默认内置两个 Speedtest TCP proxy：
-# tcp/8080 -> 127.0.0.1:18081 -> 原始目标:8080
-# tcp/5060 -> 127.0.0.1:15060 -> 原始目标:5060
-# 如需覆盖默认值，取消注释并填写完整列表。
+# 默认通过 network.tcp_redirect_port 提供通用 TCP gateway，不再按 Speedtest 端口内置代理。
+# 如需兼容历史端口代理或显式接管某个 TCP 端口，可取消注释。
 # [[tcp_proxies]]
 # name = "speedtest-8080"
 # client_port = 8080
 # listen_port = 18081
 # exit = "direct"
-#
-# [[tcp_proxies]]
-# name = "speedtest-5060"
-# client_port = 5060
-# listen_port = 15060
-# exit = "direct"
 
-# 默认内置两个 STUN UDP proxy：
-# udp/3478 -> 127.0.0.1:13478 -> stun.cloudflare.com:3478
-# udp/19302 -> 127.0.0.1:13902 -> stun.l.google.com:19302
-# 如需覆盖默认值，取消注释并填写完整列表。
+# 默认 quic_policy = "reject"，不内置 STUN UDP proxy。
+# 如需显式接管某个 UDP 端口，可取消注释。
 # [[udp_proxies]]
 # name = "stun-3478"
 # client_port = 3478
 # listen_port = 13478
 # target = "stun.cloudflare.com:3478"
-# exit = "direct"
-#
-# [[udp_proxies]]
-# name = "stun-19302"
-# client_port = 19302
-# listen_port = 13902
-# target = "stun.l.google.com:19302"
 # exit = "direct"
 
 [dns]

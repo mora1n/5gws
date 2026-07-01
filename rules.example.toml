@@ -1,8 +1,8 @@
 # 默认接近 5gpn：
 # - CN 域名走国内 DNS pool。
-# - Speedtest/Ookla 域名走 overseas_private DNS pool，保留真实目标地址。
+# - Speedtest/Ookla 域名返回 gateway_ip，再由通用 TCP gateway 从服务端出口发起。
 # - GFW 域名对内网客户端返回 gateway_ip，再进入 HAProxy/quicgw。
-# - 常见 STUN 域名返回 gateway_ip，再进入 STUN UDP proxy，减少 WebRTC 真实 IP 泄漏。
+# - 常见 STUN 域名返回 gateway_ip；默认 UDP/443 reject，促使客户端回落到可嗅探的 TCP 路径。
 
 [[rules]]
 name = "ip-check"
@@ -25,16 +25,16 @@ domain = [
 ]
 
 [[imports]]
+name = "speedtest"
+type = "sing-box"
+url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-speedtest.json"
+exit = "direct"
+
+[[imports]]
 name = "cn"
 type = "sing-box"
 url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.json"
 dns_pool = "cn"
-
-[[imports]]
-name = "speedtest"
-type = "sing-box"
-url = "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-speedtest.json"
-dns_pool = "overseas_private"
 
 [[imports]]
 name = "gfw"

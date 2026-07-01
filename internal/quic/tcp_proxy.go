@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/morain/5gws/internal/config"
+	"github.com/morain/5gws/internal/rules"
 )
 
 const (
@@ -25,6 +26,14 @@ const (
 type TCPProxy struct {
 	cfg         config.TCPProxyConfig
 	app         config.Config
+	exit        config.ExitConfig
+	listener    *net.TCPListener
+	originalDst func(*net.TCPConn) (*net.TCPAddr, error)
+}
+
+type TCPGateway struct {
+	app         config.Config
+	rules       rules.Normalized
 	exit        config.ExitConfig
 	listener    *net.TCPListener
 	originalDst func(*net.TCPConn) (*net.TCPAddr, error)
@@ -68,6 +77,116 @@ func closeTCPProxies(proxies []*TCPProxy) {
 	for _, proxy := range proxies {
 		proxy.close()
 	}
+}
+
+func listenTCPGateway(cfg config.Config, norm rules.Normalized) (*TCPGateway, error) {
+	exit, ok := cfg.ExitByName(cfg.Routing.FallbackExit)
+	if !ok {
+		return nil, fmt.Errorf("tcp gateway references unknown fallback exit %q", cfg.Routing.FallbackExit)
+	}
+	if exit.Type == "shadowsocks-rust" && !exit.TCPEnabled() {
+		return nil, fmt.Errorf("tcp gateway fallback exit %q has tcp=false", cfg.Routing.FallbackExit)
+	}
+	addr := net.JoinHostPort("0.0.0.0", strconv.Itoa(cfg.Network.TCPRedirectPort))
+	tcpAddr, err := net.ResolveTCPAddr("tcp4", addr)
+	if err != nil {
+		return nil, fmt.Errorf("tcp gateway resolve listen address: %w", err)
+	}
+	listener, err := net.ListenTCP("tcp4", tcpAddr)
+	if err != nil {
+		return nil, fmt.Errorf("tcp gateway listen %s: %w", addr, err)
+	}
+	log.Printf("tcp gateway listening on %s fallback_exit=%s", listener.Addr(), cfg.Routing.FallbackExit)
+	return &TCPGateway{app: cfg, rules: norm, exit: exit, listener: listener, originalDst: getOriginalDst}, nil
+}
+
+func (g *TCPGateway) serve(ctx context.Context) error {
+	for {
+		if err := g.listener.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			return err
+		}
+		conn, err := g.listener.AcceptTCP()
+		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				continue
+			}
+			return fmt.Errorf("tcp gateway accept failed: %w", err)
+		}
+		go g.handle(conn)
+	}
+}
+
+func (g *TCPGateway) handle(client *net.TCPConn) {
+	defer client.Close()
+	start := time.Now()
+	original, err := g.originalDst(client)
+	if err != nil {
+		log.Printf("tcp gateway src=%s rejected: original dst: %v", client.RemoteAddr(), err)
+		return
+	}
+	targetHost := original.IP.String()
+	targetPort := original.Port
+	targetSource := "original_dst"
+	exit := g.exit
+	var initial []byte
+	if isGatewayIP(original.IP, g.app.Network.GatewayIP) {
+		initial, err = readInitialTCP(client)
+		if err != nil {
+			log.Printf("tcp gateway src=%s original=%s rejected: %v", client.RemoteAddr(), original, err)
+			return
+		}
+		host, source := sniffTCPHost(initial)
+		if host == "" {
+			log.Printf("tcp gateway src=%s original=%s rejected: gateway original dst without HTTP Host or TLS SNI", client.RemoteAddr(), original)
+			return
+		}
+		targetHost = host
+		targetSource = source
+		if selected, matched, err := selectTCPExit(g.app, g.rules, host); err != nil {
+			log.Printf("tcp gateway src=%s original=%s host=%s rejected: %v", client.RemoteAddr(), original, host, err)
+			return
+		} else {
+			exit = selected
+			targetSource = fmt.Sprintf("%s matched=%t", targetSource, matched)
+		}
+	}
+	backend, target, err := dialTCPBackend(targetHost, targetPort, exit)
+	if err != nil {
+		log.Printf("tcp gateway src=%s original=%s target=%s:%d exit=%q rejected: %v", client.RemoteAddr(), original, targetHost, targetPort, exit.Name, err)
+		return
+	}
+	defer backend.Close()
+	log.Printf("tcp gateway src=%s original=%s target=%s source=%s exit=%q", client.RemoteAddr(), original, target, targetSource, exit.Name)
+	clientReader := io.Reader(client)
+	if len(initial) > 0 {
+		clientReader = io.MultiReader(bytes.NewReader(initial), client)
+	}
+	up, down := relayTCP(client, clientReader, backend)
+	log.Printf("tcp gateway src=%s target=%s ended up=%d down=%d duration=%s", client.RemoteAddr(), target, up, down, time.Since(start).Round(time.Millisecond))
+}
+
+func selectTCPExit(cfg config.Config, norm rules.Normalized, host string) (config.ExitConfig, bool, error) {
+	if rule, ok := norm.MatchGatewayDomain(host); ok {
+		exit, exists := cfg.ExitByName(rule.Exit)
+		if !exists {
+			return config.ExitConfig{}, false, fmt.Errorf("unknown exit %q", rule.Exit)
+		}
+		if exit.Type == "shadowsocks-rust" && !exit.TCPEnabled() {
+			return config.ExitConfig{}, false, fmt.Errorf("exit %q has tcp=false", exit.Name)
+		}
+		return exit, true, nil
+	}
+	exit, exists := cfg.ExitByName(cfg.Routing.FallbackExit)
+	if !exists {
+		return config.ExitConfig{}, false, fmt.Errorf("unknown fallback exit %q", cfg.Routing.FallbackExit)
+	}
+	if exit.Type == "shadowsocks-rust" && !exit.TCPEnabled() {
+		return config.ExitConfig{}, false, fmt.Errorf("fallback exit %q has tcp=false", exit.Name)
+	}
+	return exit, false, nil
 }
 
 func (p *TCPProxy) serve(ctx context.Context) error {
@@ -439,4 +558,8 @@ func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 
 func (p *TCPProxy) close() {
 	_ = p.listener.Close()
+}
+
+func (g *TCPGateway) close() {
+	_ = g.listener.Close()
 }
