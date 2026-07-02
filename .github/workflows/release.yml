@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Set version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ "${tag}" != v* ]]; then
+            echo "release tag must start with v: ${tag}" >&2
+            exit 1
+          fi
+          version="${tag#v}"
+          if [[ -z "${version}" ]]; then
+            echo "release version is empty for tag: ${tag}" >&2
+            exit 1
+          fi
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
+          echo "ASSET=dist/5gws-linux-amd64-${version}.tar.gz" >> "${GITHUB_ENV}"
+
+      - name: Build release archive
+        run: make release VERSION="${VERSION}"
+
+      - name: Verify release archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(./5gws version)" = "${VERSION}"
+          test -f "${ASSET}"
+          tar -tzf "${ASSET}" | sort > /tmp/5gws-archive-files.txt
+          diff -u <(printf '%s\n' 5gws config.example.toml rules.example.toml | sort) /tmp/5gws-archive-files.txt
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: ${{ env.ASSET }}

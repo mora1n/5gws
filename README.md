@@ -46,7 +46,7 @@ release 包只包含：
 
 ### 2. 安装
 
-需要 root 权限：
+一键安装(要root权限)：
 
 ```sh
 wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash
@@ -55,7 +55,7 @@ wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash
 固定版本：
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash -s -- --version 0.1.1
+wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash -s -- --version 0.1.9
 ```
 
 重新进入引导并覆盖生成的配置：
@@ -82,10 +82,10 @@ wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash -
 ### 4. 验证
 
 ```sh
-sudo 5gws doctor
-sudo 5gws status
-sudo 5gws logs --component haproxy --since 10m --lines 200
-sudo 5gws logs -m haproxy -s 10m -n 200 -f
+5gws doctor
+5gws status
+5gws logs --component haproxy --since 10m --lines 200
+5gws logs -m haproxy -s 10m -n 200 -f
 ```
 
 长参数使用 `--`，短参数使用 `-`。
@@ -95,30 +95,30 @@ sudo 5gws logs -m haproxy -s 10m -n 200 -f
 手动安装 release 包：
 
 ```sh
-tar xf 5gws-linux-amd64-0.1.1.tar.gz
-sudo install -m 755 5gws /usr/local/bin/5gws
-sudo 5gws install
-sudo 5gws doctor
-sudo 5gws apply
+tar xf 5gws-linux-amd64-0.1.9.tar.gz
+install -m 755 5gws /usr/local/bin/5gws
+5gws install
+5gws doctor
+5gws apply
 ```
 
 重新生成默认配置和规则：
 
 ```sh
-sudo 5gws install --reconfigure
+5gws install --reconfigure
 ```
 
 显式安装运行时：
 
 ```sh
-sudo 5gws install-smartdns --yes
-sudo 5gws install-ssrust --yes
+5gws install-smartdns --yes
+5gws install-ssrust --yes
 ```
 
 干净卸载：
 
 ```sh
-sudo 5gws uninstall --purge --yes
+5gws uninstall --purge --yes
 ```
 
 本地预览渲染结果：
@@ -265,7 +265,7 @@ Android：
 iOS / iPadOS：
 
 ```sh
-sudo 5gws ios-link --config /etc/5gws/config.toml
+5gws ios-link --config /etc/5gws/config.toml
 ```
 
 用 Safari 打开输出的 profile 链接，或扫描终端二维码安装描述文件。脚本或 Telegram 场景可使用 `--no-qr` 只输出链接。
@@ -275,14 +275,14 @@ sudo 5gws ios-link --config /etc/5gws/config.toml
 ## 运维命令
 
 ```sh
-sudo 5gws doctor
-sudo 5gws status
-sudo 5gws apply
-sudo 5gws logs --component haproxy --since 10m --lines 200
-sudo 5gws logs -m haproxy -s 10m -n 200 -f
-sudo 5gws detect-cidr --seconds 30
-sudo 5gws ios-link --config /etc/5gws/config.toml
-sudo 5gws uninstall --purge --yes
+5gws doctor
+5gws status
+5gws apply
+5gws logs --component haproxy --since 10m --lines 200
+5gws logs -m haproxy -s 10m -n 200 -f
+5gws detect-cidr --seconds 30
+5gws ios-link --config /etc/5gws/config.toml
+5gws uninstall --purge --yes
 ```
 
 - `doctor`：检查配置、规则和运行依赖。
