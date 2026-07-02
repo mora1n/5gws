@@ -20,7 +20,7 @@ func (h handler) configSummary() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "config: %s\nrules: %s\n", h.configPath, h.rulesPath)
 	fmt.Fprintf(&b, "network: gateway=%s internal=%s iface=%s\n", cfg.Network.GatewayIP, cfg.Network.InternalCIDR, cfg.Network.IngressIface)
-	fmt.Fprintf(&b, "redirect: tcp/80->%d tcp/443->%d tcp/gateway-other->%d udp/443=%s\n", cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort, cfg.Network.TCPRedirectPort, cfg.Network.QUICPolicy)
+	fmt.Fprintf(&b, "redirect: tcp/80->%d tcp/443->%d tcp/other->%d udp/443=%s encrypted_dns=%s\n", cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort, cfg.Network.TCPRedirectPort, cfg.Network.QUICPolicy, cfg.Network.EncryptedDNSPolicy)
 	for _, proxy := range cfg.TCPProxies {
 		fmt.Fprintf(&b, "tcp_proxy: tcp/%d->%d exit=%s\n", proxy.ClientPort, proxy.ListenPort, proxy.Exit)
 	}

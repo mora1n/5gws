@@ -106,17 +106,21 @@ func HAProxy(cfg config.Config, norm rules.Normalized) string {
 	gatewayRules := norm.GatewayRules()
 	exits := exitsForHAProxy(norm, cfg.Routing.FallbackExit)
 	data := struct {
-		Config       config.Config
-		Rules        []ruleView
-		Exits        []exitView
-		FallbackExit string
-		AccessLog    bool
+		Config              config.Config
+		Rules               []ruleView
+		Exits               []exitView
+		FallbackExit        string
+		AccessLog           bool
+		RejectEncryptedDNS  bool
+		EncryptedDNSDomains []string
 	}{
-		Config:       cfg,
-		Rules:        buildRuleViews(gatewayRules),
-		Exits:        buildExitViews(cfg, exits),
-		FallbackExit: sanitize(cfg.Routing.FallbackExit),
-		AccessLog:    cfg.Logging.AccessEnabled(),
+		Config:              cfg,
+		Rules:               buildRuleViews(gatewayRules),
+		Exits:               buildExitViews(cfg, exits),
+		FallbackExit:        sanitize(cfg.Routing.FallbackExit),
+		AccessLog:           cfg.Logging.AccessEnabled(),
+		RejectEncryptedDNS:  cfg.Network.EncryptedDNSPolicy == "reject",
+		EncryptedDNSDomains: encryptedDNSDomains,
 	}
 	return mustExecute(haproxyTemplate, data)
 }
@@ -186,6 +190,17 @@ type tcpProxyView struct {
 	Name       string
 	ClientPort int
 	ListenPort int
+}
+
+var encryptedDNSDomains = []string{
+	"cloudflare-dns.com",
+	"dns.google",
+	"dns.google.com",
+	"dns.quad9.net",
+	"dns.adguard-dns.com",
+	"dns.nextdns.io",
+	"one.one.one.one",
+	"1dot1dot1dot1.cloudflare-dns.com",
 }
 
 func buildRuleViews(src []rules.Rule) []ruleView {
@@ -401,6 +416,12 @@ frontend http_in
 {{- end }}
     http-request set-var(txn.host) req.hdr(host),lower
     acl has_host var(txn.host) -m found
+{{- if .RejectEncryptedDNS }}
+{{- range .EncryptedDNSDomains }}
+    acl encrypted_dns_host var(txn.host) -m str -i {{ . }}
+    acl encrypted_dns_host var(txn.host) -m end -i .{{ . }}
+{{- end }}
+{{- end }}
 {{- range .Rules }}
 {{- $rv := . }}
 {{- range .Rule.Domain }}
@@ -418,6 +439,9 @@ frontend http_in
 {{- end }}
 {{- end }}
     http-request deny deny_status 403 unless has_host
+{{- if .RejectEncryptedDNS }}
+    http-request deny deny_status 403 if encrypted_dns_host
+{{- end }}
 {{- range .Rules }}
     use_backend http_{{ san .Exit }} if {{ aclAny "host" . }}
 {{- end }}
@@ -432,10 +456,19 @@ frontend tls_in
 {{- end }}
     tcp-request inspect-delay 5s
     acl has_sni req.ssl_sni -m found
+    acl client_hello req_ssl_hello_type 1
     tcp-request content set-var(sess.sni) req.ssl_sni if has_sni
+{{- if .RejectEncryptedDNS }}
+{{- range .EncryptedDNSDomains }}
+    acl encrypted_dns_sni req.ssl_sni,lower -m str -i {{ . }}
+    acl encrypted_dns_sni req.ssl_sni,lower -m end -i .{{ . }}
+{{- end }}
+    tcp-request content reject if encrypted_dns_sni
+{{- end }}
     tcp-request content do-resolve(sess.dst,realdns,ipv4) var(sess.sni) if has_sni
     tcp-request content set-dst var(sess.dst) if has_sni
-    tcp-request content accept if { req_ssl_hello_type 1 }
+    tcp-request content reject if client_hello !has_sni
+    tcp-request content accept if client_hello
 {{- range .Rules }}
 {{- $rv := . }}
 {{- range .Rule.Domain }}
@@ -452,7 +485,6 @@ frontend tls_in
     acl sni_{{ $rv.ID }}_regex req.ssl_sni,lower -m reg {{ . }}
 {{- end }}
 {{- end }}
-    tcp-request content reject unless has_sni
 {{- range .Rules }}
     use_backend tls_{{ san .Exit }} if {{ aclAny "sni" . }}
 {{- end }}
@@ -476,6 +508,13 @@ const nftTemplate = `#!/usr/sbin/nft -f
 destroy table inet fivegws
 
 table inet fivegws {
+{{- if not .QUICProxy }}
+    chain early_filter {
+        type filter hook prerouting priority filter; policy accept;
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport 443 counter reject
+    }
+
+{{- end }}
     chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport 53 counter redirect to :{{ .DNSUDPPort }}
@@ -492,14 +531,11 @@ table inet fivegws {
 {{- range .UDPProxies }}
         iifname {{ quote $.Config.Network.IngressIface }} ip saddr {{ $.Config.Network.InternalCIDR }} udp dport {{ .ClientPort }} counter redirect to :{{ .ListenPort }}
 {{- end }}
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} ip daddr {{ .Config.Network.GatewayIP }} tcp dport != { {{ .TCPGatewayExcludedPorts }} } counter redirect to :{{ .Config.Network.TCPRedirectPort }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport != { {{ .TCPGatewayExcludedPorts }} } counter redirect to :{{ .Config.Network.TCPRedirectPort }}
     }
 
     chain input {
         type filter hook input priority filter; policy accept;
-{{- if not .QUICProxy }}
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} ip daddr {{ .Config.Network.GatewayIP }} udp dport 443 counter reject
-{{- end }}
         iifname {{ quote .Config.Network.IngressIface }} ip saddr != {{ .Config.Network.InternalCIDR }} udp dport { {{ .ProtectedUDPPorts }} } drop
         iifname {{ quote .Config.Network.IngressIface }} ip saddr != {{ .Config.Network.InternalCIDR }} tcp dport { {{ .ProtectedTCPPorts }} } reject with tcp reset
     }

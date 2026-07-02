@@ -35,11 +35,20 @@ func TestNFTablesRedirectOnlyInternalCIDR(t *testing.T) {
 	if strings.Contains(out, "flush ruleset") {
 		t.Fatalf("nft output must not flush global ruleset:\n%s", out)
 	}
-	if !strings.Contains(out, `ip daddr 10.0.0.1 tcp dport != { 53, 80, 443, 853, 1053, 1853, 18080, 18082, 18443 } counter redirect to :18082`) {
+	if !strings.Contains(out, `ip saddr 10.0.0.0/24 tcp dport != { 53, 80, 443, 853, 1053, 1853, 18080, 18082, 18443 } counter redirect to :18082`) {
 		t.Fatalf("generic gateway TCP redirect missing:\n%s", out)
 	}
-	if !strings.Contains(out, `ip saddr 10.0.0.0/24 ip daddr 10.0.0.1 udp dport 443 counter reject`) {
+	if strings.Contains(out, `ip daddr 10.0.0.1 tcp dport !=`) {
+		t.Fatalf("generic gateway TCP redirect must also catch real original destinations:\n%s", out)
+	}
+	if !strings.Contains(out, `chain early_filter`) {
+		t.Fatalf("early filter chain missing:\n%s", out)
+	}
+	if !strings.Contains(out, `ip saddr 10.0.0.0/24 udp dport 443 counter reject`) {
 		t.Fatalf("internal UDP/443 reject missing:\n%s", out)
+	}
+	if strings.Contains(out, `ip daddr 10.0.0.1 udp dport 443 counter reject`) {
+		t.Fatalf("UDP/443 reject must also catch real destinations:\n%s", out)
 	}
 	if !strings.Contains(out, `ip saddr != 10.0.0.0/24 udp dport { 1053 } drop`) {
 		t.Fatalf("non-internal UDP backend protection missing:\n%s", out)
@@ -63,6 +72,9 @@ func TestNFTablesCanProxyQUICWhenEnabled(t *testing.T) {
 	if strings.Contains(out, `udp dport 443 counter reject`) {
 		t.Fatalf("UDP/443 reject must not render in proxy mode:\n%s", out)
 	}
+	if strings.Contains(out, `chain early_filter`) {
+		t.Fatalf("early filter chain must not render in proxy mode:\n%s", out)
+	}
 	if !strings.Contains(out, `ip saddr != 10.0.0.0/24 udp dport { 1053, 18443 } drop`) {
 		t.Fatalf("QUIC listen port must be protected in proxy mode:\n%s", out)
 	}
@@ -76,6 +88,14 @@ func TestHAProxyUsesFallbackForUnknownHostOrSNI(t *testing.T) {
 	}})
 	if !strings.Contains(out, "tcp-request content reject") {
 		t.Fatalf("TLS missing-SNI reject missing:\n%s", out)
+	}
+	if !strings.Contains(out, "acl encrypted_dns_host") ||
+		!strings.Contains(out, "acl encrypted_dns_sni") ||
+		!strings.Contains(out, "cloudflare-dns.com") ||
+		!strings.Contains(out, "dns.google") ||
+		!strings.Contains(out, "http-request deny deny_status 403 if encrypted_dns_host") ||
+		!strings.Contains(out, "tcp-request content reject if encrypted_dns_sni") {
+		t.Fatalf("encrypted DNS reject ACLs missing:\n%s", out)
 	}
 	if !strings.Contains(out, "http-request deny deny_status 403") {
 		t.Fatalf("HTTP missing-Host deny missing:\n%s", out)
@@ -101,6 +121,18 @@ func TestHAProxyUsesFallbackForUnknownHostOrSNI(t *testing.T) {
 	if !strings.Contains(out, "tcp-request content do-resolve(sess.dst,realdns,ipv4) var(sess.sni)") {
 		t.Fatalf("TLS frontend must resolve the captured SNI before backend routing:\n%s", out)
 	}
+	assertBefore(t, out,
+		"tcp-request content set-var(sess.sni) req.ssl_sni if has_sni",
+		"tcp-request content reject if encrypted_dns_sni",
+	)
+	assertBefore(t, out,
+		"tcp-request content reject if client_hello !has_sni",
+		"tcp-request content accept if client_hello",
+	)
+	assertBefore(t, out,
+		"tcp-request content reject if encrypted_dns_sni",
+		"tcp-request content accept if client_hello",
+	)
 	if !strings.Contains(out, "tcp-request content set-dst var(sess.dst) if has_sni") {
 		t.Fatalf("TLS frontend must set the dynamic backend destination:\n%s", out)
 	}
@@ -118,6 +150,22 @@ func TestHAProxyUsesFallbackForUnknownHostOrSNI(t *testing.T) {
 	}
 	if !strings.Contains(out, "nameserver dns0 1.1.1.1:53") {
 		t.Fatalf("backend resolver missing:\n%s", out)
+	}
+}
+
+func TestHAProxyCanAllowEncryptedDNS(t *testing.T) {
+	cfg := testConfig()
+	cfg.Network.EncryptedDNSPolicy = "allow"
+	out := HAProxy(cfg, rules.Normalized{Rules: []rules.Rule{
+		{Name: "speedtest", Exit: "direct", DomainSuffix: []string{"speedtest.net"}},
+	}})
+	if strings.Contains(out, "encrypted_dns_host") ||
+		strings.Contains(out, "encrypted_dns_sni") ||
+		strings.Contains(out, "tcp-request content reject if encrypted_dns_sni") {
+		t.Fatalf("encrypted DNS reject ACLs must not render in allow mode:\n%s", out)
+	}
+	if !strings.Contains(out, "acl sni_r1_suffix req.ssl_sni,lower -m end -i .speedtest.net") {
+		t.Fatalf("gateway rules must still render in allow mode:\n%s", out)
 	}
 }
 
@@ -239,4 +287,19 @@ func testConfig() config.Config {
 	}
 	cfg.ApplyDefaults()
 	return cfg
+}
+
+func assertBefore(t *testing.T, text, first, second string) {
+	t.Helper()
+	firstIndex := strings.Index(text, first)
+	if firstIndex < 0 {
+		t.Fatalf("missing first marker %q:\n%s", first, text)
+	}
+	secondIndex := strings.Index(text, second)
+	if secondIndex < 0 {
+		t.Fatalf("missing second marker %q:\n%s", second, text)
+	}
+	if firstIndex >= secondIndex {
+		t.Fatalf("marker %q must appear before %q:\n%s", first, second, text)
+	}
 }

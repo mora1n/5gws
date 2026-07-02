@@ -35,14 +35,15 @@ type SystemConfig struct {
 }
 
 type NetworkConfig struct {
-	GatewayIP         string `toml:"gateway_ip"`
-	InternalCIDR      string `toml:"internal_cidr"`
-	IngressIface      string `toml:"ingress_iface"`
-	HTTPRedirectPort  int    `toml:"http_redirect_port"`
-	HTTPSRedirectPort int    `toml:"https_redirect_port"`
-	QUICRedirectPort  int    `toml:"quic_redirect_port"`
-	TCPRedirectPort   int    `toml:"tcp_redirect_port"`
-	QUICPolicy        string `toml:"quic_policy"`
+	GatewayIP          string `toml:"gateway_ip"`
+	InternalCIDR       string `toml:"internal_cidr"`
+	IngressIface       string `toml:"ingress_iface"`
+	HTTPRedirectPort   int    `toml:"http_redirect_port"`
+	HTTPSRedirectPort  int    `toml:"https_redirect_port"`
+	QUICRedirectPort   int    `toml:"quic_redirect_port"`
+	TCPRedirectPort    int    `toml:"tcp_redirect_port"`
+	QUICPolicy         string `toml:"quic_policy"`
+	EncryptedDNSPolicy string `toml:"encrypted_dns_policy"`
 }
 
 type RoutingConfig struct {
@@ -165,6 +166,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Network.QUICPolicy == "" {
 		c.Network.QUICPolicy = "reject"
+	}
+	if c.Network.EncryptedDNSPolicy == "" {
+		c.Network.EncryptedDNSPolicy = "reject"
 	}
 	if c.Routing.FallbackExit == "" {
 		c.Routing.FallbackExit = "direct"
@@ -323,9 +327,14 @@ func validateNetwork(n NetworkConfig) error {
 	}
 	switch n.QUICPolicy {
 	case "reject", "proxy":
-		return nil
 	default:
 		return fmt.Errorf("network.quic_policy must be reject or proxy: %q", n.QUICPolicy)
+	}
+	switch n.EncryptedDNSPolicy {
+	case "reject", "allow":
+		return nil
+	default:
+		return fmt.Errorf("network.encrypted_dns_policy must be reject or allow: %q", n.EncryptedDNSPolicy)
 	}
 }
 

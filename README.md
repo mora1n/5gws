@@ -17,8 +17,9 @@ release 包只包含：
 - 内网来源未命中：走 `overseas_private` DNS pool。
 - 非内网来源 DoT：走 `overseas_public` DNS pool，不返回网关 IP。
 - TCP/80、TCP/443：由 HAProxy 读取 Host/SNI 并选择出口，不解密 TLS。
-- 指向 `gateway_ip` 的其它 TCP 端口：由通用 TCP gateway 读取 HTTP Host 或 TLS SNI，还原目标域名后转发。
+- 内网来源的其它 TCP 端口：由通用 TCP gateway 转发；真实目标 IP 使用 `SO_ORIGINAL_DST`，指向 `gateway_ip` 时再读取 HTTP Host 或 TLS SNI 还原目标域名。
 - UDP/443：默认 reject，让 Android Speedtest 等 app 回落到 TCP/SNI 路径；需要 HTTP/3/QUIC 时显式设置 `network.quic_policy = "proxy"`。
+- 公共加密 DNS：默认 reject，避免 App 内置 DoH 绕过 5gws DNS 策略。
 - 缺 Host/SNI 的 TCP/QUIC 流量：拒绝并写日志，不做静默兜底。
 
 核心组件：
@@ -140,6 +141,7 @@ internal_cidr = "172.22.0.0/16"
 ingress_iface = "eth0"
 # tcp_redirect_port = 18082
 # quic_policy = "reject"
+# encrypted_dns_policy = "reject"
 
 [routing]
 fallback_exit = "direct"
@@ -163,8 +165,9 @@ type = "direct"
 - `network.gateway_ip`：返回给内网客户端的网关 IP。
 - `network.internal_cidr`：运营商内网来源段。
 - `network.ingress_iface`：接收运营商内网流量的网卡。
-- `network.tcp_redirect_port`：指向 `gateway_ip` 的非 80/443 TCP 流量进入通用 TCP gateway 的本地端口，默认 `18082`。
+- `network.tcp_redirect_port`：内网来源非保留 TCP 流量进入通用 TCP gateway 的本地端口，默认 `18082`。
 - `network.quic_policy`：`reject` 或 `proxy`，默认 `reject`。
+- `network.encrypted_dns_policy`：`reject` 或 `allow`，默认 `reject`；用于阻止客户端通过公共 DoH/DoT 绕过 5gws DNS rewrite。
 - `routing.fallback_exit`：TCP/QUIC 未命中显式 gateway 规则时使用的出口，默认 `direct`。
 - `dns.dot_domain`：Android 私人 DNS 和 iOS 描述文件使用的 DoT 主机名。
 - `dns.backend_resolvers`：HAProxy / TCP gateway 解析真实目标域名使用的 DNS，不能指向会返回 `gateway_ip` 的 rewrite 入口。

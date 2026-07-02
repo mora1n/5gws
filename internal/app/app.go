@@ -619,6 +619,9 @@ func encodeConfig(cfg config.Config) (string, error) {
 	if cfg.Network.QUICPolicy != "" && cfg.Network.QUICPolicy != "reject" {
 		fmt.Fprintf(&b, "quic_policy = %q\n", cfg.Network.QUICPolicy)
 	}
+	if cfg.Network.EncryptedDNSPolicy != "" && cfg.Network.EncryptedDNSPolicy != "reject" {
+		fmt.Fprintf(&b, "encrypted_dns_policy = %q\n", cfg.Network.EncryptedDNSPolicy)
+	}
 	fmt.Fprintf(&b, "\n[routing]\nfallback_exit = %q\n", cfg.Routing.FallbackExit)
 	fmt.Fprintf(&b, "\n[dns]\ndot_domain = %q\ncert_file = %q\nkey_file = %q\n", cfg.DNS.DOTDomain, cfg.DNS.CertFile, cfg.DNS.KeyFile)
 	writeStringSlice(&b, "backend_resolvers", cfg.DNS.BackendResolvers, nil)
@@ -994,7 +997,7 @@ func printInstallSummary(w io.Writer, cfg config.Config, norm rules.Normalized) 
 	fmt.Fprintf(w, "config_dir: %s\nstate_dir: %s\n", cfg.System.ConfigDir, cfg.System.StateDir)
 	fmt.Fprintf(w, "internal_cidr: %s via %s\n", cfg.Network.InternalCIDR, cfg.Network.IngressIface)
 	fmt.Fprintf(w, "dot_domain: %s\n", cfg.DNS.DOTDomain)
-	fmt.Fprintf(w, "redirect: tcp/80->%d tcp/443->%d tcp/gateway-other->%d udp/443=%s\n", cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort, cfg.Network.TCPRedirectPort, cfg.Network.QUICPolicy)
+	fmt.Fprintf(w, "redirect: tcp/80->%d tcp/443->%d tcp/other->%d udp/443=%s encrypted_dns=%s\n", cfg.Network.HTTPRedirectPort, cfg.Network.HTTPSRedirectPort, cfg.Network.TCPRedirectPort, cfg.Network.QUICPolicy, cfg.Network.EncryptedDNSPolicy)
 	for _, proxy := range cfg.TCPProxies {
 		fmt.Fprintf(w, "tcp_proxy: tcp/%d->%d exit=%s\n", proxy.ClientPort, proxy.ListenPort, proxy.Exit)
 	}

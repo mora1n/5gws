@@ -107,6 +107,9 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	if cfg.Network.QUICPolicy != "reject" {
 		t.Fatalf("quic_policy = %q, want reject", cfg.Network.QUICPolicy)
 	}
+	if cfg.Network.EncryptedDNSPolicy != "reject" {
+		t.Fatalf("encrypted_dns_policy = %q, want reject", cfg.Network.EncryptedDNSPolicy)
+	}
 	if len(cfg.TCPProxies) != 0 {
 		t.Fatalf("tcp proxy count = %d, want 0", len(cfg.TCPProxies))
 	}
@@ -128,6 +131,14 @@ func TestValidateRejectsInvalidQUICPolicy(t *testing.T) {
 	cfg.Network.QUICPolicy = "auto"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected invalid quic policy to be rejected")
+	}
+}
+
+func TestValidateRejectsInvalidEncryptedDNSPolicy(t *testing.T) {
+	cfg := validConfig()
+	cfg.Network.EncryptedDNSPolicy = "block"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected invalid encrypted DNS policy to be rejected")
 	}
 }
 

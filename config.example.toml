@@ -4,11 +4,12 @@ internal_cidr = "172.22.0.0/16"
 ingress_iface = "eth0"
 # tcp_redirect_port = 18082
 # quic_policy = "reject" # reject | proxy
+# encrypted_dns_policy = "reject" # reject | allow
 
 [routing]
 fallback_exit = "direct"
 
-# 默认通过 network.tcp_redirect_port 提供通用 TCP gateway，不再按 Speedtest 端口内置代理。
+# 默认通过 network.tcp_redirect_port 接管内网来源其它 TCP，不再按 Speedtest 端口内置代理。
 # 如需兼容历史端口代理或显式接管某个 TCP 端口，可取消注释。
 # [[tcp_proxies]]
 # name = "speedtest-8080"
