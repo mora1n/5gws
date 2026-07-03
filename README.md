@@ -13,12 +13,13 @@ release 包只包含：
 ## 工作模式
 
 - CN 域名：走国内 DNS pool。
-- 内网来源命中 gateway 规则：DNS A 返回 `network.gateway_ip`，流量进入网关出口。
-- 内网来源未命中：走 `overseas_private` DNS pool。
+- DNS-only 规则：只影响解析上游，客户端直连真实解析结果。
+- 内网来源命中 gateway 规则：DNS A 返回 `network.gateway_ip`，发往 `gateway_ip` 的流量进入网关出口。
+- 内网来源未命中：走 `overseas_private` DNS pool，客户端直连真实解析结果。
 - 非内网来源 DoT：走 `overseas_public` DNS pool，不返回网关 IP。
-- TCP/80、TCP/443：由 HAProxy 读取 Host/SNI 并选择出口，不解密 TLS。
-- 内网来源的其它 TCP 端口：由通用 TCP gateway 转发；真实目标 IP 使用 `SO_ORIGINAL_DST`，指向 `gateway_ip` 时再读取 HTTP Host 或 TLS SNI 还原目标域名。
-- UDP/443：默认 reject，让 Android Speedtest 等 app 回落到 TCP/SNI 路径；需要 HTTP/3/QUIC 时显式设置 `network.quic_policy = "proxy"`。
+- 发往 `gateway_ip` 的 TCP/80、TCP/443：由 HAProxy 读取 Host/SNI 并选择出口，不解密 TLS。
+- 发往 `gateway_ip` 的其它 TCP 端口：由通用 TCP gateway 转发，并读取 HTTP Host 或 TLS SNI 还原目标域名。
+- 发往 `gateway_ip` 的 UDP/443：默认 reject，让 Android Speedtest 等 app 回落到 TCP/SNI 路径；需要 HTTP/3/QUIC 时显式设置 `network.quic_policy = "proxy"`。
 - 公共加密 DNS：默认 reject，避免 App 内置 DoH 绕过 5gws DNS 策略。
 - 缺 Host/SNI 的 TCP/QUIC 流量：拒绝并写日志，不做静默兜底。
 
@@ -165,15 +166,15 @@ type = "direct"
 - `network.gateway_ip`：返回给内网客户端的网关 IP。
 - `network.internal_cidr`：运营商内网来源段。
 - `network.ingress_iface`：接收运营商内网流量的网卡。
-- `network.tcp_redirect_port`：内网来源非保留 TCP 流量进入通用 TCP gateway 的本地端口，默认 `18082`。
+- `network.tcp_redirect_port`：发往 `gateway_ip` 的非保留 TCP 流量进入通用 TCP gateway 的本地端口，默认 `18082`。
 - `network.quic_policy`：`reject` 或 `proxy`，默认 `reject`。
 - `network.encrypted_dns_policy`：`reject` 或 `allow`，默认 `reject`；用于阻止客户端通过公共 DoH/DoT 绕过 5gws DNS rewrite。
-- `routing.fallback_exit`：TCP/QUIC 未命中显式 gateway 规则时使用的出口，默认 `direct`。
+- `routing.fallback_exit`：进入网关但未命中显式 gateway 规则时使用的出口，默认 `direct`。
 - `dns.dot_domain`：Android 私人 DNS 和 iOS 描述文件使用的 DoT 主机名。
 - `dns.backend_resolvers`：HAProxy / TCP gateway 解析真实目标域名使用的 DNS，不能指向会返回 `gateway_ip` 的 rewrite 入口。
 - `logging.access`：是否输出 HAProxy access log，默认 `true`。
 
-默认 DNS 上游已内置。需要自定义时可覆盖 `dns.upstreams_cn`、`dns.upstreams_overseas_private`、`dns.upstreams_overseas_public` 和 `dns.backend_resolvers`。
+默认 DNS 上游已内置。CN 上游默认偏向在海外 VPS 上仍返回国内 CDN 的 resolver；需要自定义时可覆盖 `dns.upstreams_cn`、`dns.upstreams_overseas_private`、`dns.upstreams_overseas_public` 和 `dns.backend_resolvers`。
 
 高级兼容项保留在 `config.example.toml` 中，例如显式固定端口 `[[tcp_proxies]]` / `[[udp_proxies]]`。它们默认不启用，正常 Speedtest/Ookla 路径应优先使用通用 TCP gateway。
 
@@ -333,7 +334,7 @@ BOT_TOKEN=...
 - DoT 域名必须解析到 `network.gateway_ip`，Android 私人 DNS 会按主机名校验证书。
 - 5gws 使用 certbot 签发的公开证书，不使用自签 CA 作为 Android 主路径。
 - `dns.backend_resolvers` 不能指向会返回 `gateway_ip` 的 rewrite 入口。
-- nftables 只 redirect 同时匹配 `network.ingress_iface` 和 `network.internal_cidr` 的流量。
+- nftables 会接管内网来源的 DNS/DoT；业务流量只在目标地址为 `network.gateway_ip` 时进入网关。
 - 5gws 不直接监听公网默认 `0.0.0.0:80/443`；公网默认 80/443 不受影响。
 - STUN 包没有 Host/SNI；5gws 不做任意 UDP 域名分流。
 - 缺 Host/SNI 的 TCP/QUIC 流量会被拒绝，不做静默兜底。

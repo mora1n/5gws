@@ -8,11 +8,14 @@ import (
 	"github.com/morain/5gws/internal/rules"
 )
 
-func TestNFTablesRedirectOnlyInternalCIDR(t *testing.T) {
+func TestNFTablesRedirectsGatewayTrafficOnly(t *testing.T) {
 	cfg := testConfig()
 	out := NFTables(cfg)
-	if !strings.Contains(out, `ip saddr 10.0.0.0/24 tcp dport 80 counter redirect`) {
-		t.Fatalf("internal source redirect missing:\n%s", out)
+	if !strings.Contains(out, `ip saddr 10.0.0.0/24 ip daddr 10.0.0.1 tcp dport 80 counter redirect`) {
+		t.Fatalf("gateway HTTP redirect missing:\n%s", out)
+	}
+	if !strings.Contains(out, `ip saddr 10.0.0.0/24 ip daddr 10.0.0.1 tcp dport 443 counter redirect`) {
+		t.Fatalf("gateway TLS redirect missing:\n%s", out)
 	}
 	if !strings.Contains(out, `ip saddr 10.0.0.0/24 udp dport 53 counter redirect to :1053`) {
 		t.Fatalf("internal DNS redirect missing:\n%s", out)
@@ -35,20 +38,20 @@ func TestNFTablesRedirectOnlyInternalCIDR(t *testing.T) {
 	if strings.Contains(out, "flush ruleset") {
 		t.Fatalf("nft output must not flush global ruleset:\n%s", out)
 	}
-	if !strings.Contains(out, `ip saddr 10.0.0.0/24 tcp dport != { 53, 80, 443, 853, 1053, 1853, 18080, 18082, 18443 } counter redirect to :18082`) {
+	if !strings.Contains(out, `ip saddr 10.0.0.0/24 ip daddr 10.0.0.1 tcp dport != { 53, 80, 443, 853, 1053, 1853, 18080, 18082, 18443 } counter redirect to :18082`) {
 		t.Fatalf("generic gateway TCP redirect missing:\n%s", out)
 	}
-	if strings.Contains(out, `ip daddr 10.0.0.1 tcp dport !=`) {
-		t.Fatalf("generic gateway TCP redirect must also catch real original destinations:\n%s", out)
+	if strings.Contains(out, `ip saddr 10.0.0.0/24 tcp dport !=`) {
+		t.Fatalf("generic gateway TCP redirect must not catch real original destinations:\n%s", out)
 	}
 	if !strings.Contains(out, `chain early_filter`) {
 		t.Fatalf("early filter chain missing:\n%s", out)
 	}
-	if !strings.Contains(out, `ip saddr 10.0.0.0/24 udp dport 443 counter reject`) {
-		t.Fatalf("internal UDP/443 reject missing:\n%s", out)
+	if !strings.Contains(out, `ip saddr 10.0.0.0/24 ip daddr 10.0.0.1 udp dport 443 counter reject`) {
+		t.Fatalf("gateway UDP/443 reject missing:\n%s", out)
 	}
-	if strings.Contains(out, `ip daddr 10.0.0.1 udp dport 443 counter reject`) {
-		t.Fatalf("UDP/443 reject must also catch real destinations:\n%s", out)
+	if strings.Contains(out, `ip saddr 10.0.0.0/24 udp dport 443 counter reject`) {
+		t.Fatalf("UDP/443 reject must not catch real destinations:\n%s", out)
 	}
 	if !strings.Contains(out, `ip saddr != 10.0.0.0/24 udp dport { 1053 } drop`) {
 		t.Fatalf("non-internal UDP backend protection missing:\n%s", out)
@@ -66,7 +69,7 @@ func TestNFTablesCanProxyQUICWhenEnabled(t *testing.T) {
 	cfg := testConfig()
 	cfg.Network.QUICPolicy = "proxy"
 	out := NFTables(cfg)
-	if !strings.Contains(out, `udp dport 443 counter redirect to :18443`) {
+	if !strings.Contains(out, `ip saddr 10.0.0.0/24 ip daddr 10.0.0.1 udp dport 443 counter redirect to :18443`) {
 		t.Fatalf("UDP/443 proxy redirect missing:\n%s", out)
 	}
 	if strings.Contains(out, `udp dport 443 counter reject`) {

@@ -511,7 +511,7 @@ table inet fivegws {
 {{- if not .QUICProxy }}
     chain early_filter {
         type filter hook prerouting priority filter; policy accept;
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport 443 counter reject
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} ip daddr {{ .Config.Network.GatewayIP }} udp dport 443 counter reject
     }
 
 {{- end }}
@@ -520,18 +520,18 @@ table inet fivegws {
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport 53 counter redirect to :{{ .DNSUDPPort }}
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 53 counter redirect to :{{ .DNSTCPPort }}
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 853 counter redirect to :{{ .DNSDOTPort }}
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 80 counter redirect to :{{ .Config.Network.HTTPRedirectPort }}
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport 443 counter redirect to :{{ .Config.Network.HTTPSRedirectPort }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} ip daddr {{ .Config.Network.GatewayIP }} tcp dport 80 counter redirect to :{{ .Config.Network.HTTPRedirectPort }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} ip daddr {{ .Config.Network.GatewayIP }} tcp dport 443 counter redirect to :{{ .Config.Network.HTTPSRedirectPort }}
 {{- if .QUICProxy }}
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} udp dport 443 counter redirect to :{{ .Config.Network.QUICRedirectPort }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} ip daddr {{ .Config.Network.GatewayIP }} udp dport 443 counter redirect to :{{ .Config.Network.QUICRedirectPort }}
 {{- end }}
 {{- range .TCPProxies }}
-        iifname {{ quote $.Config.Network.IngressIface }} ip saddr {{ $.Config.Network.InternalCIDR }} tcp dport {{ .ClientPort }} counter redirect to :{{ .ListenPort }}
+        iifname {{ quote $.Config.Network.IngressIface }} ip saddr {{ $.Config.Network.InternalCIDR }} ip daddr {{ $.Config.Network.GatewayIP }} tcp dport {{ .ClientPort }} counter redirect to :{{ .ListenPort }}
 {{- end }}
 {{- range .UDPProxies }}
-        iifname {{ quote $.Config.Network.IngressIface }} ip saddr {{ $.Config.Network.InternalCIDR }} udp dport {{ .ClientPort }} counter redirect to :{{ .ListenPort }}
+        iifname {{ quote $.Config.Network.IngressIface }} ip saddr {{ $.Config.Network.InternalCIDR }} ip daddr {{ $.Config.Network.GatewayIP }} udp dport {{ .ClientPort }} counter redirect to :{{ .ListenPort }}
 {{- end }}
-        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} tcp dport != { {{ .TCPGatewayExcludedPorts }} } counter redirect to :{{ .Config.Network.TCPRedirectPort }}
+        iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} ip daddr {{ .Config.Network.GatewayIP }} tcp dport != { {{ .TCPGatewayExcludedPorts }} } counter redirect to :{{ .Config.Network.TCPRedirectPort }}
     }
 
     chain input {

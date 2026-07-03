@@ -224,7 +224,8 @@ func suggestedCIDR(ip net.IP) string {
 func writeDoctorRuntime(out io.Writer, cfg config.Config) {
 	fmt.Fprintln(out, "redirect_mode: nft redirect only; public 80/443 are not listened by 5gws")
 	fmt.Fprintf(out, "redirect_match: iifname=%s source=%s\n", cfg.Network.IngressIface, cfg.Network.InternalCIDR)
-	fmt.Fprintf(out, "redirect_tcp_gateway: tcp other -> %d\n", cfg.Network.TCPRedirectPort)
+	fmt.Fprintf(out, "redirect_gateway_ip: %s\n", cfg.Network.GatewayIP)
+	fmt.Fprintf(out, "redirect_tcp_gateway: gateway_ip tcp other -> %d\n", cfg.Network.TCPRedirectPort)
 	fmt.Fprintf(out, "quic_policy: %s\n", cfg.Network.QUICPolicy)
 	fmt.Fprintf(out, "encrypted_dns_policy: %s\n", cfg.Network.EncryptedDNSPolicy)
 	data, err := exec.Command("nft", "list", "chain", "inet", "fivegws", "prerouting").CombinedOutput()

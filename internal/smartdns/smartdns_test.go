@@ -29,8 +29,10 @@ func TestConfigRendersAddressRules(t *testing.T) {
 		"force-qtype-SOA 64 65",
 		"address /openai.com/10.0.0.1",
 		"nameserver /example.cn/cn",
-		"server 223.5.5.5 -group cn -exclude-default-group",
-		"server 22.22.22.22 -group overseas_private -exclude-default-group",
+		"server 180.76.76.76 -group cn -exclude-default-group",
+		"server 101.226.4.6 -group cn -exclude-default-group",
+		"server 218.30.118.6 -group cn -exclude-default-group",
+		"server 22.22.22.22 -group overseas_private",
 		"server 22.22.22.22 -group overseas_public -exclude-default-group",
 		"server https://dns.quad9.net/dns-query -group overseas_public -exclude-default-group",
 		"server 9.9.9.9 -group overseas_public -exclude-default-group",
@@ -41,6 +43,18 @@ func TestConfigRendersAddressRules(t *testing.T) {
 	}
 	if strings.Contains(out, "server 1.1.1.1 -group overseas_private") {
 		t.Fatalf("private overseas default must only use 22.22.22.22:\n%s", out)
+	}
+	if strings.Contains(out, "bind 0.0.0.0:1053 -group") ||
+		strings.Contains(out, "bind-tcp 0.0.0.0:1053 -group") ||
+		strings.Contains(out, "bind-tls 0.0.0.0:1853 -group") {
+		t.Fatalf("internal DNS listeners must allow nameserver rules to select groups:\n%s", out)
+	}
+	if strings.Contains(out, "server 22.22.22.22 -group overseas_private -exclude-default-group") {
+		t.Fatalf("private overseas upstream must remain in the default group for unmatched internal DNS:\n%s", out)
+	}
+	if strings.Contains(out, "server 223.5.5.5 -group cn") ||
+		strings.Contains(out, "server 119.29.29.29 -group cn") {
+		t.Fatalf("CN defaults must avoid resolvers that returned overseas NetEase CDN from JP:\n%s", out)
 	}
 	if strings.Contains(out, "address /example.cn/") {
 		t.Fatalf("DNS pool rule must not render address rewrite:\n%s", out)

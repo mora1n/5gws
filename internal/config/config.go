@@ -220,11 +220,6 @@ func (c *Config) ApplyDefaults() {
 	}
 	if len(c.DNS.UpstreamsCN) == 0 {
 		c.DNS.UpstreamsCN = []string{
-			"https://223.5.5.5/dns-query",
-			"https://doh.pub/dns-query",
-			"223.5.5.5",
-			"223.6.6.6",
-			"119.29.29.29",
 			"180.76.76.76",
 			"101.226.4.6",
 			"218.30.118.6",
