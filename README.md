@@ -65,6 +65,20 @@ wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash -
 wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | bash -s -- --reconfigure
 ```
 
+更新到最新 release：
+
+```sh
+sudo 5gws update
+```
+
+固定版本更新：
+
+```sh
+sudo 5gws update --version 0.1.10
+```
+
+`5gws update` 会下载 release tarball 和同名 `.sha256`，校验通过后备份当前二进制、原子替换、重启服务并运行 health-check。失败会自动恢复旧二进制并再次检查；没有 `.sha256` 的旧 release 会拒绝更新。
+
 `5gws install` 会询问：
 
 - `gateway IP`：返回给内网客户端的网关 IP。
@@ -278,6 +292,7 @@ iOS / iPadOS：
 ```sh
 5gws doctor
 5gws status
+sudo 5gws update
 5gws apply
 5gws logs --component haproxy --since 10m --lines 200
 5gws logs -m haproxy -s 10m -n 200 -f
@@ -288,6 +303,7 @@ iOS / iPadOS：
 
 - `doctor`：检查配置、规则和运行依赖。
 - `status`：查看 systemd 服务状态。
+- `update`：下载 release、校验 SHA256、备份替换并失败回滚。
 - `apply`：重新渲染配置并重启运行服务。
 - `logs`：查看 journald 日志；`-f` / `--follow` 持续跟随。
 - `detect-cidr`：抓包观察客户端来源 IP。
@@ -346,6 +362,7 @@ go test ./...
 VERSION=0.1.0
 make release VERSION="$VERSION"
 tar tf "dist/5gws-linux-amd64-${VERSION}.tar.gz"
+cd dist && sha256sum -c "5gws-linux-amd64-${VERSION}.tar.gz.sha256"
 ```
 
 tar 包应只包含 `5gws`、`config.example.toml`、`rules.example.toml`。

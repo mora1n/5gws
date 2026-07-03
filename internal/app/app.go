@@ -44,6 +44,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return cmdApply(args[1:], stdout)
 	case "install":
 		return cmdInstall(args[1:], stdin, stdout)
+	case "update":
+		return cmdUpdate(args[1:], stdout)
 	case "install-smartdns":
 		return cmdInstallSmartDNS(args[1:], stdout)
 	case "install-ssrust":
@@ -76,6 +78,7 @@ func usage(w io.Writer) {
 
 Main:
   install           guided install and enable services
+  update            update binary with sha256 verification and rollback
   apply             render config and restart services
   doctor            validate config and runtime deps
   logs              show journald logs for 5gws services

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/morain/5gws/internal/checksum"
 	"github.com/morain/5gws/internal/config"
 )
 
@@ -221,43 +222,7 @@ func findFile(root, name string) (string, error) {
 }
 
 func prepareChecksumFile(dir, checksumFile, asset string) error {
-	path := filepath.Join(dir, checksumFile)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	line := firstNonEmptyLine(string(data))
-	if line == "" {
-		return fmt.Errorf("%s is empty", checksumFile)
-	}
-	fields := strings.Fields(line)
-	if len(fields) != 1 {
-		return nil
-	}
-	hash := fields[0]
-	if len(hash) != 64 || !isHex(hash) {
-		return nil
-	}
-	return os.WriteFile(path, []byte(hash+"  "+asset+"\n"), 0o600)
-}
-
-func firstNonEmptyLine(text string) string {
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			return line
-		}
-	}
-	return ""
-}
-
-func isHex(value string) bool {
-	for _, r := range value {
-		if (r < '0' || r > '9') && (r < 'a' || r > 'f') && (r < 'A' || r > 'F') {
-			return false
-		}
-	}
-	return true
+	return checksum.NormalizeBareSHA256File(filepath.Join(dir, checksumFile), asset)
 }
 
 func run(out io.Writer, dir, name string, args ...string) error {

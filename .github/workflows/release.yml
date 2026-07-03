@@ -38,6 +38,7 @@ jobs:
           fi
           echo "VERSION=${version}" >> "${GITHUB_ENV}"
           echo "ASSET=dist/5gws-linux-amd64-${version}.tar.gz" >> "${GITHUB_ENV}"
+          echo "CHECKSUM=dist/5gws-linux-amd64-${version}.tar.gz.sha256" >> "${GITHUB_ENV}"
 
       - name: Build release archive
         run: make release VERSION="${VERSION}"
@@ -48,6 +49,8 @@ jobs:
           set -euo pipefail
           test "$(./5gws version)" = "${VERSION}"
           test -f "${ASSET}"
+          test -f "${CHECKSUM}"
+          (cd dist && sha256sum -c "$(basename "${CHECKSUM}")")
           tar -tzf "${ASSET}" | sort > /tmp/5gws-archive-files.txt
           diff -u <(printf '%s\n' 5gws config.example.toml rules.example.toml | sort) /tmp/5gws-archive-files.txt
 
@@ -59,4 +62,6 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-          files: ${{ env.ASSET }}
+          files: |
+            ${{ env.ASSET }}
+            ${{ env.CHECKSUM }}

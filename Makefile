@@ -14,6 +14,7 @@ build:
 release: test build
 	mkdir -p $(DIST)
 	tar -czf $(DIST)/$(BINARY)-linux-amd64-$(VERSION).tar.gz $(BINARY) config.example.toml rules.example.toml
+	cd $(DIST) && sha256sum $(BINARY)-linux-amd64-$(VERSION).tar.gz > $(BINARY)-linux-amd64-$(VERSION).tar.gz.sha256
 
 clean:
 	rm -rf $(BINARY) $(DIST) rendered rendered-*

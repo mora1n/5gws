@@ -20,7 +20,7 @@ func TestHelpAliases(t *testing.T) {
 			t.Fatalf("%v help mismatch\nwant:\n%s\n got:\n%s", args, empty, got)
 		}
 	}
-	for _, want := range []string{"Usage:", "Main:", "Client:", "Runtime/debug:", "install", "ios-link", "logs", "detect-cidr"} {
+	for _, want := range []string{"Usage:", "Main:", "Client:", "Runtime/debug:", "install", "update", "ios-link", "logs", "detect-cidr"} {
 		if !strings.Contains(empty, want) {
 			t.Fatalf("help missing %q:\n%s", want, empty)
 		}
