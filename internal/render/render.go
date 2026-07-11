@@ -25,20 +25,26 @@ type OutputFile struct {
 }
 
 func Generate(cfg config.Config, norm rules.Normalized) ([]OutputFile, error) {
+	return GenerateAt(cfg, norm, filepath.Join(cfg.System.StateDir, "rendered"))
+}
+
+func GenerateAt(cfg config.Config, norm rules.Normalized, root string) ([]OutputFile, error) {
 	if err := validateExits(cfg, norm); err != nil {
 		return nil, err
 	}
-	smartdnsConf, err := smartdns.Config(cfg, norm)
+	smartdnsOut, err := smartdns.GenerateAt(cfg, norm, filepath.Join(root, "smartdns"))
 	if err != nil {
 		return nil, err
 	}
+	haproxyConfig, aclFiles := HAProxyAt(cfg, norm, root)
 	files := []OutputFile{
-		{"haproxy/haproxy.cfg", HAProxy(cfg, norm), 0o600},
+		{"haproxy/haproxy.cfg", haproxyConfig, 0o600},
 		{"nftables/5gws.nft", NFTables(cfg), 0o600},
-		{"smartdns/smartdns.conf", smartdnsConf, 0o600},
-		{"systemd/5gws-smartdns.service", serviceUnit("5gws smartdns-rs", smartDNSCommand(cfg)), 0o644},
-		{"systemd/5gws-haproxy.service", serviceUnit("5gws haproxy", "/usr/sbin/haproxy -Ws -f "+cfg.System.StateDir+"/rendered/haproxy/haproxy.cfg"), 0o644},
-		{"systemd/5gws-quic.service", serviceUnit("5gws quic gateway", "/usr/local/bin/5gws quicgw --config "+cfg.System.ConfigDir+"/config.toml --rules "+cfg.System.ConfigDir+"/rules.toml"), 0o644},
+		{"smartdns/smartdns.conf", smartdnsOut.Config, 0o600},
+	}
+	files = append(files, aclFiles...)
+	for name, content := range smartdnsOut.Files {
+		files = append(files, OutputFile{"smartdns/" + name, content, 0o600})
 	}
 	for _, exit := range cfg.Exits {
 		if exit.Type != "shadowsocks-rust" {
@@ -51,14 +57,7 @@ func Generate(cfg config.Config, norm rules.Normalized) ([]OutputFile, error) {
 		configPath := "ssrust/" + sanitize(exit.Name) + ".json"
 		files = append(files,
 			OutputFile{configPath, ssConfig, 0o600},
-			OutputFile{"systemd/" + ssrust.ServiceName(exit), serviceUnit("5gws shadowsocks-rust "+exit.Name, "/usr/local/bin/sslocal -c "+cfg.System.StateDir+"/rendered/"+configPath), 0o644},
 		)
-	}
-	if cfg.IOS.Enabled {
-		files = append(files, OutputFile{"systemd/5gws-cert.service", serviceUnit("5gws iOS certificate server", "/usr/local/bin/5gws cert-server --config "+cfg.System.ConfigDir+"/config.toml --dir "+cfg.System.StateDir+"/ios"), 0o644})
-	}
-	if cfg.Telegram.Enabled {
-		files = append(files, OutputFile{"systemd/5gws-bot.service", serviceUnit("5gws telegram bot", "/usr/local/bin/5gws bot --config "+cfg.System.ConfigDir+"/config.toml --rules "+cfg.System.ConfigDir+"/rules.toml"), 0o644})
 	}
 	return files, nil
 }
@@ -103,31 +102,38 @@ func validateTCPExit(cfg config.Config, name, label string) error {
 }
 
 func HAProxy(cfg config.Config, norm rules.Normalized) string {
+	out, _ := HAProxyAt(cfg, norm, filepath.Join(cfg.System.StateDir, "rendered"))
+	return out
+}
+
+func HAProxyAt(cfg config.Config, norm rules.Normalized, root string) (string, []OutputFile) {
 	gatewayRules := norm.GatewayRules()
 	exits := exitsForHAProxy(norm, cfg.Routing.FallbackExit)
+	views, files := buildRuleViews(gatewayRules, root)
 	data := struct {
 		Config              config.Config
 		Rules               []ruleView
 		Exits               []exitView
 		FallbackExit        string
+		HAProxyMaxConn      int
 		AccessLog           bool
 		RejectEncryptedDNS  bool
 		EncryptedDNSDomains []string
 	}{
 		Config:              cfg,
-		Rules:               buildRuleViews(gatewayRules),
+		Rules:               views,
 		Exits:               buildExitViews(cfg, exits),
 		FallbackExit:        sanitize(cfg.Routing.FallbackExit),
+		HAProxyMaxConn:      *cfg.Network.HAProxyMaxConnections,
 		AccessLog:           cfg.Logging.AccessEnabled(),
 		RejectEncryptedDNS:  cfg.Network.EncryptedDNSPolicy == "reject",
 		EncryptedDNSDomains: encryptedDNSDomains,
 	}
-	return mustExecute(haproxyTemplate, data)
+	return mustExecute(haproxyTemplate, data), files
 }
 
 func NFTables(cfg config.Config) string {
 	dnsUDPPort := mustPort(cfg.DNS.ListenUDP)
-	udpProxies := buildUDPProxyViews(cfg.UDPProxies)
 	quicProxy := cfg.Network.QUICPolicy == "proxy"
 	data := struct {
 		Config                  config.Config
@@ -136,8 +142,6 @@ func NFTables(cfg config.Config) string {
 		DNSDOTPort              int
 		QUICProxy               bool
 		TCPGatewayExcludedPorts string
-		TCPProxies              []tcpProxyView
-		UDPProxies              []udpProxyView
 		ProtectedTCPPorts       string
 		ProtectedUDPPorts       string
 	}{
@@ -147,10 +151,8 @@ func NFTables(cfg config.Config) string {
 		DNSDOTPort:              mustPort(cfg.DNS.ListenDOT),
 		QUICProxy:               quicProxy,
 		TCPGatewayExcludedPorts: joinInts(tcpGatewayExcludedPorts(cfg)),
-		TCPProxies:              buildTCPProxyViews(cfg.TCPProxies),
-		UDPProxies:              udpProxies,
 		ProtectedTCPPorts:       joinInts(protectedTCPPorts(cfg)),
-		ProtectedUDPPorts:       joinInts(protectedUDPPorts(cfg, udpProxies, quicProxy)),
+		ProtectedUDPPorts:       joinInts(protectedUDPPorts(cfg, quicProxy)),
 	}
 	return mustExecute(nftTemplate, data)
 }
@@ -170,26 +172,18 @@ func exitsForHAProxy(norm rules.Normalized, fallback string) []string {
 }
 
 type ruleView struct {
-	ID   string
-	Exit string
-	Rule rules.Rule
+	ID             string
+	Exit           string
+	ExactFile      string
+	SuffixFile     string
+	SuffixRootFile string
+	Rule           rules.Rule
 }
 
 type exitView struct {
 	Name   string
 	Type   string
 	Socks4 string
-}
-
-type udpProxyView struct {
-	ClientPort int
-	ListenPort int
-}
-
-type tcpProxyView struct {
-	Name       string
-	ClientPort int
-	ListenPort int
 }
 
 var encryptedDNSDomains = []string{
@@ -203,12 +197,31 @@ var encryptedDNSDomains = []string{
 	"1dot1dot1dot1.cloudflare-dns.com",
 }
 
-func buildRuleViews(src []rules.Rule) []ruleView {
+func buildRuleViews(src []rules.Rule, root string) ([]ruleView, []OutputFile) {
 	views := make([]ruleView, 0, len(src))
+	var files []OutputFile
 	for i, rule := range src {
-		views = append(views, ruleView{ID: fmt.Sprintf("r%d", i+1), Exit: sanitize(rule.Exit), Rule: rule})
+		id := fmt.Sprintf("r%d", i+1)
+		view := ruleView{ID: id, Exit: sanitize(rule.Exit), Rule: rule}
+		if len(rule.Domain) > 0 {
+			view.ExactFile = filepath.Join(root, "haproxy", "rules", id+"_exact.lst")
+			files = append(files, OutputFile{Path: filepath.Join("haproxy", "rules", id+"_exact.lst"), Content: strings.Join(rule.Domain, "\n") + "\n", Mode: 0o600})
+		}
+		if len(rule.DomainSuffix) > 0 {
+			view.SuffixFile = filepath.Join(root, "haproxy", "rules", id+"_suffix.lst")
+			view.SuffixRootFile = filepath.Join(root, "haproxy", "rules", id+"_suffix_root.lst")
+			suffixes := make([]string, len(rule.DomainSuffix))
+			for i, domain := range rule.DomainSuffix {
+				suffixes[i] = "." + domain
+			}
+			files = append(files,
+				OutputFile{Path: filepath.Join("haproxy", "rules", id+"_suffix.lst"), Content: strings.Join(suffixes, "\n") + "\n", Mode: 0o600},
+				OutputFile{Path: filepath.Join("haproxy", "rules", id+"_suffix_root.lst"), Content: strings.Join(rule.DomainSuffix, "\n") + "\n", Mode: 0o600},
+			)
+		}
+		views = append(views, view)
 	}
-	return views
+	return views, files
 }
 
 func buildExitViews(cfg config.Config, names []string) []exitView {
@@ -222,42 +235,6 @@ func buildExitViews(cfg config.Config, names []string) []exitView {
 		views = append(views, view)
 	}
 	return views
-}
-
-func buildTCPProxyViews(src []config.TCPProxyConfig) []tcpProxyView {
-	views := make([]tcpProxyView, 0, len(src))
-	for _, proxy := range src {
-		views = append(views, tcpProxyView{
-			Name:       proxy.Name,
-			ClientPort: proxy.ClientPort,
-			ListenPort: proxy.ListenPort,
-		})
-	}
-	return views
-}
-
-func buildUDPProxyViews(src []config.UDPProxyConfig) []udpProxyView {
-	views := make([]udpProxyView, 0, len(src))
-	for _, proxy := range src {
-		views = append(views, udpProxyView{ClientPort: proxy.ClientPort, ListenPort: proxy.ListenPort})
-	}
-	return views
-}
-
-func tcpProxyListenPorts(proxies []config.TCPProxyConfig) []int {
-	ports := make([]int, 0, len(proxies))
-	for _, proxy := range proxies {
-		ports = append(ports, proxy.ListenPort)
-	}
-	return ports
-}
-
-func udpProxyListenPorts(proxies []udpProxyView) []int {
-	ports := make([]int, 0, len(proxies))
-	for _, proxy := range proxies {
-		ports = append(ports, proxy.ListenPort)
-	}
-	return ports
 }
 
 func tcpGatewayExcludedPorts(cfg config.Config) []int {
@@ -274,9 +251,6 @@ func tcpGatewayExcludedPorts(cfg config.Config) []int {
 	if cfg.DNS.ListenPublicDOT != "" {
 		ports = append(ports, mustPort(cfg.DNS.ListenPublicDOT))
 	}
-	for _, proxy := range cfg.TCPProxies {
-		ports = append(ports, proxy.ClientPort, proxy.ListenPort)
-	}
 	return uniqueInts(ports)
 }
 
@@ -288,16 +262,14 @@ func protectedTCPPorts(cfg config.Config) []int {
 		cfg.Network.HTTPSRedirectPort,
 		cfg.Network.TCPRedirectPort,
 	}
-	ports = append(ports, tcpProxyListenPorts(cfg.TCPProxies)...)
 	return uniqueInts(ports)
 }
 
-func protectedUDPPorts(cfg config.Config, udpProxies []udpProxyView, quicProxy bool) []int {
+func protectedUDPPorts(cfg config.Config, quicProxy bool) []int {
 	ports := []int{mustPort(cfg.DNS.ListenUDP)}
 	if quicProxy {
 		ports = append(ports, cfg.Network.QUICRedirectPort)
 	}
-	ports = append(ports, udpProxyListenPorts(udpProxies)...)
 	return uniqueInts(ports)
 }
 
@@ -329,13 +301,6 @@ func sanitize(value string) string {
 	return strings.Trim(out, "_")
 }
 
-func serviceUnit(description, execStart string) string {
-	return mustExecute(serviceTemplate, struct {
-		Description string
-		ExecStart   string
-	}{description, execStart})
-}
-
 func mustExecute(tmpl string, data any) string {
 	t := template.Must(template.New("render").Funcs(template.FuncMap{
 		"aclAny":    aclAny,
@@ -354,27 +319,6 @@ func quote(s string) string {
 	return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"`
 }
 
-func serviceBinary(name string) string {
-	if strings.Contains(name, "/") {
-		return name
-	}
-	return "/usr/local/bin/" + name
-}
-
-func smartDNSCommand(cfg config.Config) string {
-	cmd := serviceBinary(cfg.DNS.Binary) + " run -c " + cfg.System.StateDir + "/rendered/smartdns/smartdns.conf"
-	switch cfg.Logging.Level {
-	case "debug":
-		return cmd + " -v"
-	case "warn":
-		return cmd + " -q"
-	case "error":
-		return cmd + " -q -q"
-	default:
-		return cmd
-	}
-}
-
 func mustPort(addr string) int {
 	_, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -391,6 +335,9 @@ const haproxyTemplate = `# Generated by 5gws. Do not edit.
 global
     log stdout format raw local0
     stats socket {{ .Config.System.RunDir }}/haproxy.sock mode 660 level admin
+{{- if .HAProxyMaxConn }}
+    maxconn {{ .HAProxyMaxConn }}
+{{- end }}
 
 defaults
     log global
@@ -424,12 +371,12 @@ frontend http_in
 {{- end }}
 {{- range .Rules }}
 {{- $rv := . }}
-{{- range .Rule.Domain }}
-    acl host_{{ $rv.ID }}_exact var(txn.host) -m str -i {{ . }}
+{{- if .ExactFile }}
+    acl host_{{ $rv.ID }}_exact var(txn.host) -m str -i -f {{ .ExactFile }}
 {{- end }}
-{{- range .Rule.DomainSuffix }}
-    acl host_{{ $rv.ID }}_suffix var(txn.host) -m end -i .{{ . }}
-    acl host_{{ $rv.ID }}_root var(txn.host) -m str -i {{ . }}
+{{- if .SuffixFile }}
+    acl host_{{ $rv.ID }}_suffix var(txn.host) -m end -i -f {{ .SuffixFile }}
+    acl host_{{ $rv.ID }}_root var(txn.host) -m str -i -f {{ .SuffixRootFile }}
 {{- end }}
 {{- range .Rule.DomainKeyword }}
     acl host_{{ $rv.ID }}_keyword var(txn.host) -m sub -i {{ . }}
@@ -471,12 +418,12 @@ frontend tls_in
     tcp-request content accept if client_hello
 {{- range .Rules }}
 {{- $rv := . }}
-{{- range .Rule.Domain }}
-    acl sni_{{ $rv.ID }}_exact req.ssl_sni,lower -m str -i {{ . }}
+{{- if .ExactFile }}
+    acl sni_{{ $rv.ID }}_exact req.ssl_sni,lower -m str -i -f {{ .ExactFile }}
 {{- end }}
-{{- range .Rule.DomainSuffix }}
-    acl sni_{{ $rv.ID }}_suffix req.ssl_sni,lower -m end -i .{{ . }}
-    acl sni_{{ $rv.ID }}_root req.ssl_sni,lower -m str -i {{ . }}
+{{- if .SuffixFile }}
+    acl sni_{{ $rv.ID }}_suffix req.ssl_sni,lower -m end -i -f {{ .SuffixFile }}
+    acl sni_{{ $rv.ID }}_root req.ssl_sni,lower -m str -i -f {{ .SuffixRootFile }}
 {{- end }}
 {{- range .Rule.DomainKeyword }}
     acl sni_{{ $rv.ID }}_keyword req.ssl_sni,lower -m sub -i {{ . }}
@@ -525,12 +472,6 @@ table inet fivegws {
 {{- if .QUICProxy }}
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} ip daddr {{ .Config.Network.GatewayIP }} udp dport 443 counter redirect to :{{ .Config.Network.QUICRedirectPort }}
 {{- end }}
-{{- range .TCPProxies }}
-        iifname {{ quote $.Config.Network.IngressIface }} ip saddr {{ $.Config.Network.InternalCIDR }} ip daddr {{ $.Config.Network.GatewayIP }} tcp dport {{ .ClientPort }} counter redirect to :{{ .ListenPort }}
-{{- end }}
-{{- range .UDPProxies }}
-        iifname {{ quote $.Config.Network.IngressIface }} ip saddr {{ $.Config.Network.InternalCIDR }} ip daddr {{ $.Config.Network.GatewayIP }} udp dport {{ .ClientPort }} counter redirect to :{{ .ListenPort }}
-{{- end }}
         iifname {{ quote .Config.Network.IngressIface }} ip saddr {{ .Config.Network.InternalCIDR }} ip daddr {{ .Config.Network.GatewayIP }} tcp dport != { {{ .TCPGatewayExcludedPorts }} } counter redirect to :{{ .Config.Network.TCPRedirectPort }}
     }
 
@@ -540,19 +481,4 @@ table inet fivegws {
         iifname {{ quote .Config.Network.IngressIface }} ip saddr != {{ .Config.Network.InternalCIDR }} tcp dport { {{ .ProtectedTCPPorts }} } reject with tcp reset
     }
 }
-`
-
-const serviceTemplate = `[Unit]
-Description={{ .Description }}
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-ExecStart={{ .ExecStart }}
-Restart=on-failure
-RestartSec=2s
-
-[Install]
-WantedBy=multi-user.target
 `

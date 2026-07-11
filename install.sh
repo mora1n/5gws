@@ -10,14 +10,14 @@ install_args=()
 
 usage() {
     cat <<'EOF'
-Usage: install.sh [--version VERSION] [--dry-run] [--skip-5gws-install] [5gws install flags]
+Usage: install.sh [--version VERSION] [--dry-run] [--skip-5gws-install]
 
 Downloads the 5gws linux-amd64 release asset, installs the binary to
 /usr/local/bin/5gws, then runs "5gws install".
 
 Examples:
   wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash
-  wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash -s -- --reconfigure
+  wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash -s -- --version 0.2.0
 EOF
 }
 
@@ -45,14 +45,9 @@ while [[ $# -gt 0 ]]; do
             run_install=0
             shift
             ;;
-        --assume-yes|--reconfigure)
+        --assume-yes)
             install_args+=("$1")
             shift
-            ;;
-        --config|--rules)
-            [[ $# -ge 2 ]] || die "$1 requires a value"
-            install_args+=("$1" "$2")
-            shift 2
             ;;
         -h|--help)
             usage
@@ -101,7 +96,11 @@ json_string() {
 }
 
 asset_urls() {
-    sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*5gws-linux-amd64-[^"]*\.tar\.gz\)".*/\1/p'
+    sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\/5gws-linux-amd64\)".*/\1/p'
+}
+
+checksum_urls() {
+    sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\/5gws-linux-amd64\.sha256\)".*/\1/p'
 }
 
 release_json_for_tag() {
@@ -110,14 +109,16 @@ release_json_for_tag() {
 }
 
 resolve_release() {
-    local json tag urls asset_version url
+    local json tag url checksum
     if [[ -z "$version" ]]; then
         json="$(download_stdout "https://api.github.com/repos/${repo}/releases/latest")"
         tag="$(printf '%s\n' "$json" | json_string tag_name | head -n1)"
         [[ -n "$tag" ]] || die "latest release has no tag_name"
         url="$(printf '%s\n' "$json" | asset_urls | head -n1)"
         [[ -n "$url" ]] || die "latest release has no 5gws linux-amd64 asset"
-        printf '%s\n%s\n' "$tag" "$url"
+        checksum="$(printf '%s\n' "$json" | checksum_urls | head -n1)"
+        [[ -n "$checksum" ]] || die "latest release has no checksum asset"
+        printf '%s\n%s\n%s\n' "$tag" "$url" "$checksum"
         return
     fi
 
@@ -129,11 +130,10 @@ resolve_release() {
     for tag in "${candidates[@]}"; do
         info "trying release tag ${tag}"
         if json="$(release_json_for_tag "$tag" 2>/dev/null)"; then
-            urls="$(printf '%s\n' "$json" | asset_urls)"
-            asset_version="${version#v}"
-            url="$(printf '%s\n' "$urls" | grep "/5gws-linux-amd64-${asset_version}\\.tar\\.gz$" | head -n1 || true)"
-            [[ -n "$url" ]] || die "release ${tag} has no asset 5gws-linux-amd64-${asset_version}.tar.gz"
-            printf '%s\n%s\n' "$tag" "$url"
+            url="$(printf '%s\n' "$json" | asset_urls | head -n1)"
+            checksum="$(printf '%s\n' "$json" | checksum_urls | head -n1)"
+            [[ -n "$url" && -n "$checksum" ]] || die "release ${tag} lacks the linux-amd64 binary or checksum"
+            printf '%s\n%s\n%s\n' "$tag" "$url" "$checksum"
             return
         fi
     done
@@ -150,9 +150,9 @@ case "$(uname -m)" in
     *) die "unsupported architecture: $(uname -m); only linux-amd64 release assets are available" ;;
 esac
 
-require_cmd tar
 require_cmd install
 require_cmd mktemp
+require_cmd sha256sum
 
 if [[ "$dry_run" -eq 0 && "${EUID}" -ne 0 ]]; then
     die "this installer must run as root; use: wget -qO- https://raw.githubusercontent.com/${repo}/main/install.sh | sudo bash"
@@ -161,6 +161,7 @@ fi
 mapfile -t resolved < <(resolve_release)
 release_tag="${resolved[0]}"
 asset_url="${resolved[1]}"
+checksum_url="${resolved[2]}"
 
 info "release: ${release_tag}"
 info "asset: ${asset_url}"
@@ -177,12 +178,13 @@ fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-archive="${tmp}/5gws.tar.gz"
-download_file "$asset_url" "$archive"
-tar -xzf "$archive" -C "$tmp"
-[[ -x "${tmp}/5gws" ]] || die "archive did not contain executable 5gws"
+binary="${tmp}/5gws-linux-amd64"
+checksum="${tmp}/5gws-linux-amd64.sha256"
+download_file "$asset_url" "$binary"
+download_file "$checksum_url" "$checksum"
+(cd "$tmp" && sha256sum -c "$(basename "$checksum")") || die "release checksum verification failed"
 
-install -m 755 "${tmp}/5gws" "${install_dir}/5gws"
+install -m 755 "$binary" "${install_dir}/5gws"
 info "installed ${install_dir}/5gws"
 
 if [[ "$run_install" -eq 0 ]]; then

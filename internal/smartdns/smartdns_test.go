@@ -10,13 +10,14 @@ import (
 
 func TestConfigRendersAddressRules(t *testing.T) {
 	cfg := testConfig()
-	out, err := Config(cfg, rules.Normalized{Rules: []rules.Rule{
+	generated, err := Generate(cfg, rules.Normalized{Rules: []rules.Rule{
 		{Name: "openai", Exit: "ss1", DomainSuffix: []string{"openai.com"}},
 		{Name: "cn", DNSPool: "cn", DomainSuffix: []string{"example.cn"}},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
+	out := generated.Config
 	for _, want := range []string{
 		"bind 0.0.0.0:1053",
 		"bind-tcp 0.0.0.0:1053",
@@ -27,8 +28,8 @@ func TestConfigRendersAddressRules(t *testing.T) {
 		"response-mode fastest-response",
 		"force-AAAA-SOA yes",
 		"force-qtype-SOA 64 65",
-		"address /openai.com/10.0.0.1",
-		"nameserver /example.cn/cn",
+		"address /domain-set:gateway/10.0.0.1",
+		"nameserver /domain-set:pool_cn/cn",
 		"server 180.76.76.76 -group cn -exclude-default-group",
 		"server 101.226.4.6 -group cn -exclude-default-group",
 		"server 218.30.118.6 -group cn -exclude-default-group",
@@ -40,6 +41,12 @@ func TestConfigRendersAddressRules(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("missing %q in:\n%s", want, out)
 		}
+	}
+	if generated.Files["gateway.list"] != "openai.com\n" {
+		t.Fatalf("gateway domain set = %q", generated.Files["gateway.list"])
+	}
+	if generated.Files["pool_cn.list"] != "example.cn\n" {
+		t.Fatalf("cn domain set = %q", generated.Files["pool_cn.list"])
 	}
 	if strings.Contains(out, "server 1.1.1.1 -group overseas_private") {
 		t.Fatalf("private overseas default must only use 22.22.22.22:\n%s", out)
@@ -90,19 +97,20 @@ func TestConfigUsesFirstDomainRule(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := Config(testConfig(), rules.Normalized{Rules: tc.rules})
+			generated, err := Generate(testConfig(), rules.Normalized{Rules: tc.rules})
 			if err != nil {
 				t.Fatal(err)
 			}
-			hasAddress := strings.Contains(out, "address /ippure.com/10.0.0.1")
-			hasNameserver := strings.Contains(out, "nameserver /ippure.com/cn")
+			out := generated.Config
+			hasAddress := strings.Contains(generated.Files["gateway.list"], "ippure.com\n")
+			hasNameserver := strings.Contains(generated.Files["pool_cn.list"], "ippure.com\n")
 			if hasAddress != tc.wantAddress {
 				t.Fatalf("gateway rewrite state for ippure.com = %t, want %t:\n%s", hasAddress, tc.wantAddress, out)
 			}
 			if hasNameserver != tc.wantNameserver {
 				t.Fatalf("dns_pool state for ippure.com = %t, want %t:\n%s", hasNameserver, tc.wantNameserver, out)
 			}
-			if !strings.Contains(out, "nameserver /example.cn/cn") {
+			if !strings.Contains(generated.Files["pool_cn.list"], "example.cn\n") {
 				t.Fatalf("unrelated dns_pool rule must still render:\n%s", out)
 			}
 		})

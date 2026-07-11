@@ -26,6 +26,9 @@ type Options struct {
 }
 
 func EnsureRuntime(cfg config.Config, dryRun bool, out io.Writer) error {
+	if err := ensureSystemPackages(dryRun, out); err != nil {
+		return err
+	}
 	if err := ensureSmartDNS(cfg, dryRun, out); err != nil {
 		return err
 	}
@@ -33,6 +36,32 @@ func EnsureRuntime(cfg config.Config, dryRun bool, out io.Writer) error {
 		return ensureSSRust(dryRun, out)
 	}
 	return nil
+}
+
+func ensureSystemPackages(dryRun bool, out io.Writer) error {
+	var missing []string
+	for _, name := range []string{"haproxy", "nft"} {
+		if _, err := exec.LookPath(name); err != nil {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	if dryRun {
+		fmt.Fprintf(out, "dry-run: would install system packages for %s\n", strings.Join(missing, ", "))
+		return nil
+	}
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("installing %s requires root", strings.Join(missing, ", "))
+	}
+	if _, err := exec.LookPath("apt-get"); err != nil {
+		return fmt.Errorf("missing required runtime commands %s and apt-get is unavailable", strings.Join(missing, ", "))
+	}
+	if err := run(out, "", "apt-get", "update"); err != nil {
+		return err
+	}
+	return run(out, "", "apt-get", "install", "-y", "haproxy", "nftables")
 }
 
 func InstallSmartDNS(opts Options, out io.Writer) error {

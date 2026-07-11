@@ -154,21 +154,43 @@ func TestHAProxyUsesFallbackForUnknownHostOrSNI(t *testing.T) {
 	if !strings.Contains(out, "nameserver dns0 1.1.1.1:53") {
 		t.Fatalf("backend resolver missing:\n%s", out)
 	}
+	if !strings.Contains(out, "    maxconn 16384") {
+		t.Fatalf("HAProxy maxconn missing:\n%s", out)
+	}
+}
+
+func TestHAProxyCanUseAutomaticMaxConnections(t *testing.T) {
+	cfg := testConfig()
+	automatic := 0
+	cfg.Network.HAProxyMaxConnections = &automatic
+	out := HAProxy(cfg, rules.Normalized{})
+	if strings.Contains(out, "maxconn") {
+		t.Fatalf("automatic mode must omit maxconn:\n%s", out)
+	}
 }
 
 func TestHAProxyCanAllowEncryptedDNS(t *testing.T) {
 	cfg := testConfig()
 	cfg.Network.EncryptedDNSPolicy = "allow"
-	out := HAProxy(cfg, rules.Normalized{Rules: []rules.Rule{
+	out, files := HAProxyAt(cfg, rules.Normalized{Rules: []rules.Rule{
 		{Name: "speedtest", Exit: "direct", DomainSuffix: []string{"speedtest.net"}},
-	}})
+	}}, "/test/rendered")
 	if strings.Contains(out, "encrypted_dns_host") ||
 		strings.Contains(out, "encrypted_dns_sni") ||
 		strings.Contains(out, "tcp-request content reject if encrypted_dns_sni") {
 		t.Fatalf("encrypted DNS reject ACLs must not render in allow mode:\n%s", out)
 	}
-	if !strings.Contains(out, "acl sni_r1_suffix req.ssl_sni,lower -m end -i .speedtest.net") {
+	if !strings.Contains(out, "acl sni_r1_suffix req.ssl_sni,lower -m end -i -f /test/rendered/haproxy/rules/r1_suffix.lst") ||
+		!strings.Contains(out, "acl sni_r1_root req.ssl_sni,lower -m str -i -f /test/rendered/haproxy/rules/r1_suffix_root.lst") {
 		t.Fatalf("gateway rules must still render in allow mode:\n%s", out)
+	}
+	got := map[string]string{}
+	for _, file := range files {
+		got[file.Path] = file.Content
+	}
+	if got["haproxy/rules/r1_suffix.lst"] != ".speedtest.net\n" ||
+		got["haproxy/rules/r1_suffix_root.lst"] != "speedtest.net\n" {
+		t.Fatalf("suffix ACL files must distinguish subdomains from the root: %#v", got)
 	}
 }
 
@@ -197,7 +219,6 @@ func TestGenerateRejectsUDPOonlyExitForHAProxy(t *testing.T) {
 func TestGenerateUsesComponentSubdirectories(t *testing.T) {
 	cfg := testConfig()
 	cfg.IOS.Enabled = true
-	cfg.Telegram.Enabled = true
 	files, err := Generate(cfg, rules.Normalized{Rules: []rules.Rule{
 		{Name: "openai", Exit: "ss1", DomainSuffix: []string{"openai.com"}},
 	}})
@@ -210,32 +231,25 @@ func TestGenerateUsesComponentSubdirectories(t *testing.T) {
 	}
 	for _, want := range []string{
 		"haproxy/haproxy.cfg",
+		"haproxy/rules/r1_suffix.lst",
+		"haproxy/rules/r1_suffix_root.lst",
 		"nftables/5gws.nft",
 		"smartdns/smartdns.conf",
+		"smartdns/gateway.list",
 		"ssrust/ss1.json",
-		"systemd/5gws-smartdns.service",
-		"systemd/5gws-haproxy.service",
-		"systemd/5gws-quic.service",
-		"systemd/5gws-ssrust-ss1.service",
-		"systemd/5gws-cert.service",
-		"systemd/5gws-bot.service",
 	} {
 		if _, ok := got[want]; !ok {
 			t.Fatalf("missing generated file %q; got %#v", want, got)
 		}
 	}
-	if strings.Contains(got["systemd/5gws-haproxy.service"], "/rendered/haproxy.cfg") {
-		t.Fatalf("haproxy service still points at old flat path:\n%s", got["systemd/5gws-haproxy.service"])
-	}
-	if !strings.Contains(got["systemd/5gws-haproxy.service"], "/rendered/haproxy/haproxy.cfg") {
-		t.Fatalf("haproxy service does not point at component path:\n%s", got["systemd/5gws-haproxy.service"])
-	}
-	if !strings.Contains(got["systemd/5gws-bot.service"], "--rules /etc/5gws/rules.toml") {
-		t.Fatalf("bot service does not pass rules path:\n%s", got["systemd/5gws-bot.service"])
+	for path := range got {
+		if strings.HasPrefix(path, "systemd/") {
+			t.Fatalf("single-daemon render must not generate child units: %s", path)
+		}
 	}
 }
 
-func TestGenerateUsesSmartDNSLoggingFlags(t *testing.T) {
+func TestGenerateDoesNotEmitServiceUnits(t *testing.T) {
 	cfg := testConfig()
 	cfg.Logging.Level = "debug"
 	files, err := Generate(cfg, rules.Normalized{})
@@ -246,8 +260,10 @@ func TestGenerateUsesSmartDNSLoggingFlags(t *testing.T) {
 	for _, file := range files {
 		got[file.Path] = file.Content
 	}
-	if !strings.Contains(got["systemd/5gws-smartdns.service"], "smartdns run -c /var/lib/5gws/rendered/smartdns/smartdns.conf -v") {
-		t.Fatalf("debug smartdns flags missing:\n%s", got["systemd/5gws-smartdns.service"])
+	for path := range got {
+		if strings.HasPrefix(path, "systemd/") {
+			t.Fatalf("unexpected unit: %s", path)
+		}
 	}
 }
 

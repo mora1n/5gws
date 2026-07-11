@@ -1,0 +1,6 @@
+<template><div class="panel-section flex items-center justify-between"><h2 class="text-lg font-semibold">日志与诊断</h2><button class="btn btn-ghost btn-square btn-sm" title="刷新" @click="refresh"><RefreshCw class="size-4" /></button></div>
+  <section class="panel-section"><pre class="h-[min(65vh,42rem)] overflow-auto border border-base-300 bg-neutral p-4 text-xs leading-5 text-neutral-content">{{ logs || '暂无日志' }}</pre></section></template>
+<script setup lang="ts">import { onMounted, onUnmounted, ref } from 'vue'; import { RefreshCw } from '@lucide/vue'; import { api } from '@/api'; const logs = ref(''); const emit = defineEmits<{ error: [value: string] }>(); let events: EventSource | null = null
+function report(cause: unknown){ emit('error', cause instanceof Error ? cause.message : String(cause)) }
+async function refresh(){ try { logs.value = (await api.logs()).logs } catch (cause) { report(cause) } } onMounted(async()=>{ await refresh(); events = new EventSource('/api/v1/logs/stream'); events.onmessage = e => { try { const body = JSON.parse(e.data); logs.value = body.logs } catch (cause) { report(cause) } }; events.onerror = () => report('日志流连接中断') }); onUnmounted(()=>events?.close())
+</script>

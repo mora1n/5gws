@@ -110,11 +110,27 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	if cfg.Network.EncryptedDNSPolicy != "reject" {
 		t.Fatalf("encrypted_dns_policy = %q, want reject", cfg.Network.EncryptedDNSPolicy)
 	}
-	if len(cfg.TCPProxies) != 0 {
-		t.Fatalf("tcp proxy count = %d, want 0", len(cfg.TCPProxies))
+	if cfg.Network.HAProxyMaxConnections == nil || *cfg.Network.HAProxyMaxConnections != DefaultHAProxyMaxConnections {
+		t.Fatalf("haproxy_max_connections = %v, want %d", cfg.Network.HAProxyMaxConnections, DefaultHAProxyMaxConnections)
 	}
-	if len(cfg.UDPProxies) != 0 {
-		t.Fatalf("udp proxy count = %d, want 0", len(cfg.UDPProxies))
+}
+
+func TestApplyDefaultsPreservesAutomaticHAProxyMaxConnections(t *testing.T) {
+	cfg := validConfig()
+	automatic := 0
+	cfg.Network.HAProxyMaxConnections = &automatic
+	cfg.ApplyDefaults()
+	if cfg.Network.HAProxyMaxConnections == nil || *cfg.Network.HAProxyMaxConnections != 0 {
+		t.Fatalf("haproxy_max_connections = %v, want explicit automatic mode", cfg.Network.HAProxyMaxConnections)
+	}
+}
+
+func TestValidateRejectsNegativeHAProxyMaxConnections(t *testing.T) {
+	cfg := validConfig()
+	invalid := -1
+	cfg.Network.HAProxyMaxConnections = &invalid
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected negative haproxy_max_connections to be rejected")
 	}
 }
 
@@ -233,69 +249,6 @@ func TestValidateRejectsTCPDisabledFallbackExit(t *testing.T) {
 	cfg.Routing.FallbackExit = exit.Name
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected tcp-disabled fallback exit to be rejected")
-	}
-}
-
-func TestValidateRejectsTCPProxyListenPortConflict(t *testing.T) {
-	cfg := validConfig()
-	cfg.TCPProxies = []TCPProxyConfig{{
-		Name:       "bad",
-		ClientPort: 8080,
-		ListenPort: cfg.Network.TCPRedirectPort,
-		Exit:       "direct",
-	}}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected conflicting tcp proxy listen port to be rejected")
-	}
-}
-
-func TestValidateRejectsTCPProxyWithUnknownExit(t *testing.T) {
-	cfg := validConfig()
-	cfg.TCPProxies = []TCPProxyConfig{{
-		Name:       "speedtest-test",
-		ClientPort: 8080,
-		ListenPort: 18081,
-		Exit:       "missing",
-	}}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected unknown exit to be rejected for tcp proxy")
-	}
-}
-
-func TestValidateRejectsTCPProxyWithTCPDisabledExit(t *testing.T) {
-	cfg := validConfig()
-	tcp, udp := false, true
-	exit := validSSExit()
-	exit.TCP = &tcp
-	exit.UDP = &udp
-	cfg.Exits = append(cfg.Exits, exit)
-	cfg.TCPProxies = []TCPProxyConfig{{
-		Name:       "speedtest-test",
-		ClientPort: 8080,
-		ListenPort: 18081,
-		Exit:       exit.Name,
-	}}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected tcp-disabled exit to be rejected for tcp proxy")
-	}
-}
-
-func TestValidateRejectsUDPProxyWithUDPDisabledExit(t *testing.T) {
-	cfg := validConfig()
-	tcp, udp := true, false
-	exit := validSSExit()
-	exit.TCP = &tcp
-	exit.UDP = &udp
-	cfg.Exits = append(cfg.Exits, exit)
-	cfg.UDPProxies = []UDPProxyConfig{{
-		Name:       "stun-test",
-		ClientPort: 3478,
-		ListenPort: 13478,
-		Target:     "stun.example.com:3478",
-		Exit:       exit.Name,
-	}}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected udp-disabled exit to be rejected for udp proxy")
 	}
 }
 

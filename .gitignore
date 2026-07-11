@@ -1,4 +1,41 @@
+# Go build and release output
 /5gws
 /dist/
-/rendered*/
 /coverage.out
+/*.test
+/*.prof
+
+# Generated runtime state
+/rendered*/
+
+# Frontend dependencies and caches
+/web/node_modules/
+/web/.vite/
+/web/.cache/
+/web/*.tsbuildinfo
+
+# Generated embedded frontend
+/internal/web/dist/
+
+# Frontend test output
+/web/coverage/
+/web/test-results/
+/web/playwright-report/
+
+# Package manager logs
+/web/npm-debug.log*
+/web/pnpm-debug.log*
+/web/yarn-debug.log*
+/web/yarn-error.log*
+
+# Local environment and OS files
+/.env
+/.env.*
+!/.env.example
+.DS_Store
+Thumbs.db
+
+# AI coding
+**/CLAUDE.md
+**/AGENTS.md
+.codex/

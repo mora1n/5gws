@@ -18,7 +18,7 @@ import (
 
 type Gateway struct {
 	cfg      config.Config
-	rules    rules.Normalized
+	rules    *rules.Compiled
 	listener *net.UDPConn
 	mu       sync.RWMutex
 	sessions map[string]*session
@@ -38,24 +38,22 @@ type packetConn interface {
 }
 
 func Run(ctx context.Context, cfg config.Config, norm rules.Normalized) error {
-	proxies, err := listenUDPProxies(cfg)
+	compiled, err := rules.Compile(norm)
 	if err != nil {
 		return err
 	}
-	defer closeUDPProxies(proxies)
-	tcpGateway, err := listenTCPGateway(cfg, norm)
+	return RunCompiled(ctx, cfg, norm, compiled)
+}
+
+func RunCompiled(ctx context.Context, cfg config.Config, norm rules.Normalized, compiled *rules.Compiled) error {
+	tcpGateway, err := listenTCPGatewayCompiled(cfg, compiled)
 	if err != nil {
 		return err
 	}
 	defer tcpGateway.close()
-	tcpProxies, err := listenTCPProxies(cfg)
-	if err != nil {
-		return err
-	}
-	defer closeTCPProxies(tcpProxies)
-	errCh := make(chan error, 2+len(proxies)+len(tcpProxies))
+	errCh := make(chan error, 2)
 	if cfg.Network.QUICPolicy == "proxy" {
-		gw, err := listenQUICGateway(cfg, norm)
+		gw, err := listenQUICGateway(cfg, compiled)
 		if err != nil {
 			return err
 		}
@@ -70,21 +68,10 @@ func Run(ctx context.Context, cfg config.Config, norm rules.Normalized) error {
 	go func() {
 		errCh <- tcpGateway.serve(ctx)
 	}()
-	for _, proxy := range proxies {
-		go proxy.gc(ctx)
-		go func(proxy *UDPProxy) {
-			errCh <- proxy.serve(ctx)
-		}(proxy)
-	}
-	for _, proxy := range tcpProxies {
-		go func(proxy *TCPProxy) {
-			errCh <- proxy.serve(ctx)
-		}(proxy)
-	}
 	return <-errCh
 }
 
-func listenQUICGateway(cfg config.Config, norm rules.Normalized) (*Gateway, error) {
+func listenQUICGateway(cfg config.Config, compiled *rules.Compiled) (*Gateway, error) {
 	addr := net.JoinHostPort("0.0.0.0", strconv.Itoa(cfg.Network.QUICRedirectPort))
 	udpAddr, err := net.ResolveUDPAddr("udp4", addr)
 	if err != nil {
@@ -94,8 +81,8 @@ func listenQUICGateway(cfg config.Config, norm rules.Normalized) (*Gateway, erro
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("quic gateway listening on %s rules=%d fallback_exit=%s", conn.LocalAddr(), len(norm.GatewayRules()), cfg.Routing.FallbackExit)
-	return &Gateway{cfg: cfg, rules: norm, listener: conn, sessions: map[string]*session{}}, nil
+	log.Printf("quic gateway listening on %s rules=%d fallback_exit=%s", conn.LocalAddr(), compiled.Len(), cfg.Routing.FallbackExit)
+	return &Gateway{cfg: cfg, rules: compiled, listener: conn, sessions: map[string]*session{}}, nil
 }
 
 func (g *Gateway) serve(ctx context.Context) error {
@@ -146,7 +133,7 @@ func (g *Gateway) newSession(data []byte, addr *net.UDPAddr) {
 		log.Printf("quic %s rejected: missing SNI or unsupported QUIC Initial", addr)
 		return
 	}
-	exit, matched, err := selectExit(g.cfg, g.rules, sni)
+	exit, matched, err := selectExitCompiled(g.cfg, g.rules, sni)
 	if err != nil {
 		log.Printf("quic %s rejected: %v", addr, err)
 		return
@@ -183,7 +170,15 @@ func (g *Gateway) newSession(data []byte, addr *net.UDPAddr) {
 }
 
 func selectExit(cfg config.Config, norm rules.Normalized, sni string) (config.ExitConfig, bool, error) {
-	if rule, ok := norm.MatchGatewayDomain(sni); ok {
+	compiled, err := rules.Compile(norm)
+	if err != nil {
+		return config.ExitConfig{}, false, err
+	}
+	return selectExitCompiled(cfg, compiled, sni)
+}
+
+func selectExitCompiled(cfg config.Config, compiled *rules.Compiled, sni string) (config.ExitConfig, bool, error) {
+	if rule, ok := compiled.MatchGatewayDomain(sni); ok {
 		exit, exists := cfg.ExitByName(rule.Exit)
 		if !exists {
 			return config.ExitConfig{}, false, fmt.Errorf("unknown exit %q", rule.Exit)

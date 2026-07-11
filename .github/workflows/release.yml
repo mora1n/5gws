@@ -37,8 +37,23 @@ jobs:
             exit 1
           fi
           echo "VERSION=${version}" >> "${GITHUB_ENV}"
-          echo "ASSET=dist/5gws-linux-amd64-${version}.tar.gz" >> "${GITHUB_ENV}"
-          echo "CHECKSUM=dist/5gws-linux-amd64-${version}.tar.gz.sha256" >> "${GITHUB_ENV}"
+          echo "ASSET=dist/5gws-linux-amd64" >> "${GITHUB_ENV}"
+          echo "CHECKSUM=dist/5gws-linux-amd64.sha256" >> "${GITHUB_ENV}"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.15.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install panel dependencies
+        run: cd web && pnpm install --frozen-lockfile
 
       - name: Build release archive
         run: make release VERSION="${VERSION}"
@@ -51,8 +66,7 @@ jobs:
           test -f "${ASSET}"
           test -f "${CHECKSUM}"
           (cd dist && sha256sum -c "$(basename "${CHECKSUM}")")
-          tar -tzf "${ASSET}" | sort > /tmp/5gws-archive-files.txt
-          diff -u <(printf '%s\n' 5gws config.example.toml rules.example.toml | sort) /tmp/5gws-archive-files.txt
+          test "$(find dist -maxdepth 1 -type f -name '5gws-linux-*' ! -name '*.sha256' | wc -l)" = 1
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2

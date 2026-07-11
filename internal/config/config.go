@@ -15,106 +15,91 @@ import (
 )
 
 type Config struct {
-	System     SystemConfig     `toml:"system"`
-	Network    NetworkConfig    `toml:"network"`
-	Routing    RoutingConfig    `toml:"routing"`
-	DNS        DNSConfig        `toml:"dns"`
-	Logging    LoggingConfig    `toml:"logging"`
-	IOS        IOSConfig        `toml:"ios"`
-	Telegram   TelegramConfig   `toml:"telegram"`
-	TCPProxies []TCPProxyConfig `toml:"tcp_proxies"`
-	UDPProxies []UDPProxyConfig `toml:"udp_proxies"`
-	Exits      []ExitConfig     `toml:"exits"`
+	System  SystemConfig  `toml:"system" json:"system"`
+	Panel   PanelConfig   `toml:"panel" json:"panel"`
+	Network NetworkConfig `toml:"network" json:"network"`
+	Routing RoutingConfig `toml:"routing" json:"routing"`
+	DNS     DNSConfig     `toml:"dns" json:"dns"`
+	Logging LoggingConfig `toml:"logging" json:"logging"`
+	IOS     IOSConfig     `toml:"ios" json:"ios"`
+	Exits   []ExitConfig  `toml:"exits" json:"exits"`
 }
 
 type SystemConfig struct {
-	ConfigDir string `toml:"config_dir"`
-	StateDir  string `toml:"state_dir"`
-	RunDir    string `toml:"run_dir"`
-	User      string `toml:"user"`
+	ConfigDir string `toml:"config_dir" json:"config_dir"`
+	StateDir  string `toml:"state_dir" json:"state_dir"`
+	RunDir    string `toml:"run_dir" json:"run_dir"`
+	User      string `toml:"user" json:"user"`
+}
+
+type PanelConfig struct {
+	Listen       string   `toml:"listen" json:"listen"`
+	AllowedCIDRs []string `toml:"allowed_cidrs" json:"allowed_cidrs"`
 }
 
 type NetworkConfig struct {
-	GatewayIP          string `toml:"gateway_ip"`
-	InternalCIDR       string `toml:"internal_cidr"`
-	IngressIface       string `toml:"ingress_iface"`
-	HTTPRedirectPort   int    `toml:"http_redirect_port"`
-	HTTPSRedirectPort  int    `toml:"https_redirect_port"`
-	QUICRedirectPort   int    `toml:"quic_redirect_port"`
-	TCPRedirectPort    int    `toml:"tcp_redirect_port"`
-	QUICPolicy         string `toml:"quic_policy"`
-	EncryptedDNSPolicy string `toml:"encrypted_dns_policy"`
+	GatewayIP             string `toml:"gateway_ip" json:"gateway_ip"`
+	InternalCIDR          string `toml:"internal_cidr" json:"internal_cidr"`
+	IngressIface          string `toml:"ingress_iface" json:"ingress_iface"`
+	HTTPRedirectPort      int    `toml:"http_redirect_port" json:"http_redirect_port"`
+	HTTPSRedirectPort     int    `toml:"https_redirect_port" json:"https_redirect_port"`
+	QUICRedirectPort      int    `toml:"quic_redirect_port" json:"quic_redirect_port"`
+	TCPRedirectPort       int    `toml:"tcp_redirect_port" json:"tcp_redirect_port"`
+	HAProxyMaxConnections *int   `toml:"haproxy_max_connections" json:"haproxy_max_connections"`
+	QUICPolicy            string `toml:"quic_policy" json:"quic_policy"`
+	EncryptedDNSPolicy    string `toml:"encrypted_dns_policy" json:"encrypted_dns_policy"`
 }
 
+const DefaultHAProxyMaxConnections = 16384
+
 type RoutingConfig struct {
-	FallbackExit string `toml:"fallback_exit"`
+	FallbackExit string `toml:"fallback_exit" json:"fallback_exit"`
 }
 
 type DNSConfig struct {
-	Binary                   string   `toml:"binary"`
-	DOTDomain                string   `toml:"dot_domain"`
-	ListenUDP                string   `toml:"listen_udp"`
-	ListenTCP                string   `toml:"listen_tcp"`
-	ListenDOT                string   `toml:"listen_dot"`
-	ListenPublicDOT          string   `toml:"listen_public_dot"`
-	BackendResolvers         []string `toml:"backend_resolvers"`
-	CertDir                  string   `toml:"cert_dir"`
-	CertFile                 string   `toml:"cert_file"`
-	KeyFile                  string   `toml:"key_file"`
-	CacheSize                int      `toml:"cache_size"`
-	UpstreamsCN              []string `toml:"upstreams_cn"`
-	UpstreamsOverseasPrivate []string `toml:"upstreams_overseas_private"`
-	UpstreamsOverseasPublic  []string `toml:"upstreams_overseas_public"`
+	Binary                   string   `toml:"binary" json:"binary"`
+	DOTDomain                string   `toml:"dot_domain" json:"dot_domain"`
+	ListenUDP                string   `toml:"listen_udp" json:"listen_udp"`
+	ListenTCP                string   `toml:"listen_tcp" json:"listen_tcp"`
+	ListenDOT                string   `toml:"listen_dot" json:"listen_dot"`
+	ListenPublicDOT          string   `toml:"listen_public_dot" json:"listen_public_dot"`
+	BackendResolvers         []string `toml:"backend_resolvers" json:"backend_resolvers"`
+	CertDir                  string   `toml:"cert_dir" json:"cert_dir"`
+	CertFile                 string   `toml:"cert_file" json:"cert_file"`
+	KeyFile                  string   `toml:"key_file" json:"key_file"`
+	CacheSize                int      `toml:"cache_size" json:"cache_size"`
+	UpstreamsCN              []string `toml:"upstreams_cn" json:"upstreams_cn"`
+	UpstreamsOverseasPrivate []string `toml:"upstreams_overseas_private" json:"upstreams_overseas_private"`
+	UpstreamsOverseasPublic  []string `toml:"upstreams_overseas_public" json:"upstreams_overseas_public"`
 }
 
 type LoggingConfig struct {
-	Level  string `toml:"level"`
-	Access *bool  `toml:"access"`
+	Level  string `toml:"level" json:"level"`
+	Access *bool  `toml:"access" json:"access"`
 }
 
 type IOSConfig struct {
-	Enabled           bool   `toml:"enabled"`
-	Listen            string `toml:"listen"`
-	BaseURL           string `toml:"base_url"`
-	Organization      string `toml:"organization"`
-	ProfileIdentifier string `toml:"profile_identifier"`
-}
-
-type TelegramConfig struct {
-	Enabled      bool     `toml:"enabled"`
-	BotEnv       string   `toml:"bot_env"`
-	AllowedUsers []string `toml:"allowed_users"`
-}
-
-type UDPProxyConfig struct {
-	Name       string `toml:"name"`
-	ClientPort int    `toml:"client_port"`
-	ListenPort int    `toml:"listen_port"`
-	Target     string `toml:"target"`
-	Exit       string `toml:"exit"`
-}
-
-type TCPProxyConfig struct {
-	Name       string `toml:"name"`
-	ClientPort int    `toml:"client_port"`
-	ListenPort int    `toml:"listen_port"`
-	Exit       string `toml:"exit"`
+	Enabled           bool   `toml:"enabled" json:"enabled"`
+	Listen            string `toml:"listen" json:"listen"`
+	BaseURL           string `toml:"base_url" json:"base_url"`
+	Organization      string `toml:"organization" json:"organization"`
+	ProfileIdentifier string `toml:"profile_identifier" json:"profile_identifier"`
 }
 
 type ExitConfig struct {
-	Name           string `toml:"name"`
-	Type           string `toml:"type"`
-	FWMark         int    `toml:"fwmark"`
-	Server         string `toml:"server"`
-	ServerPort     int    `toml:"server_port"`
-	Method         string `toml:"method"`
-	Password       string `toml:"password"`
-	Username       string `toml:"username"`
-	ListenAddress  string `toml:"listen_address"`
-	ListenPort     int    `toml:"listen_port"`
-	TCP            *bool  `toml:"tcp"`
-	UDP            *bool  `toml:"udp"`
-	TimeoutSeconds int    `toml:"timeout_seconds"`
+	Name           string `toml:"name" json:"name"`
+	Type           string `toml:"type" json:"type"`
+	FWMark         int    `toml:"fwmark" json:"fwmark"`
+	Server         string `toml:"server" json:"server"`
+	ServerPort     int    `toml:"server_port" json:"server_port"`
+	Method         string `toml:"method" json:"method"`
+	Password       string `toml:"password" json:"password"`
+	Username       string `toml:"username" json:"username"`
+	ListenAddress  string `toml:"listen_address" json:"listen_address"`
+	ListenPort     int    `toml:"listen_port" json:"listen_port"`
+	TCP            *bool  `toml:"tcp" json:"tcp"`
+	UDP            *bool  `toml:"udp" json:"udp"`
+	TimeoutSeconds int    `toml:"timeout_seconds" json:"timeout_seconds"`
 }
 
 func Load(path string) (Config, error) {
@@ -152,6 +137,12 @@ func (c *Config) ApplyDefaults() {
 	if c.System.User == "" {
 		c.System.User = "5gws"
 	}
+	if c.Panel.Listen == "" {
+		c.Panel.Listen = "0.0.0.0:8443"
+	}
+	if len(c.Panel.AllowedCIDRs) == 0 && c.Network.InternalCIDR != "" {
+		c.Panel.AllowedCIDRs = []string{"127.0.0.0/8", "::1/128", c.Network.InternalCIDR}
+	}
 	if c.Network.HTTPRedirectPort == 0 {
 		c.Network.HTTPRedirectPort = 18080
 	}
@@ -164,6 +155,10 @@ func (c *Config) ApplyDefaults() {
 	if c.Network.TCPRedirectPort == 0 {
 		c.Network.TCPRedirectPort = 18082
 	}
+	if c.Network.HAProxyMaxConnections == nil {
+		value := DefaultHAProxyMaxConnections
+		c.Network.HAProxyMaxConnections = &value
+	}
 	if c.Network.QUICPolicy == "" {
 		c.Network.QUICPolicy = "reject"
 	}
@@ -172,11 +167,6 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Routing.FallbackExit == "" {
 		c.Routing.FallbackExit = "direct"
-	}
-	for i := range c.TCPProxies {
-		if c.TCPProxies[i].Exit == "" {
-			c.TCPProxies[i].Exit = "direct"
-		}
 	}
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
@@ -216,7 +206,7 @@ func (c *Config) ApplyDefaults() {
 		c.DNS.KeyFile = c.System.ConfigDir + "/certs/privkey.pem"
 	}
 	if c.DNS.CacheSize == 0 {
-		c.DNS.CacheSize = 8192
+		c.DNS.CacheSize = 32768
 	}
 	if len(c.DNS.UpstreamsCN) == 0 {
 		c.DNS.UpstreamsCN = []string{
@@ -270,6 +260,9 @@ func (c Config) Validate() error {
 	if err := validateNetwork(c.Network); err != nil {
 		return err
 	}
+	if err := validatePanel(c.Panel); err != nil {
+		return err
+	}
 	if len(c.Exits) == 0 {
 		return errors.New("at least one [[exits]] entry is required")
 	}
@@ -292,20 +285,21 @@ func (c Config) Validate() error {
 	if err := validateRouting(c.Routing, c.Exits); err != nil {
 		return err
 	}
-	if err := validateTCPProxies(c.TCPProxies, c); err != nil {
-		return err
-	}
-	if err := validateUDPProxies(c.UDPProxies, c.Exits); err != nil {
-		return err
-	}
 	return nil
 }
 
-func DefaultTCPProxies() []TCPProxyConfig {
-	return nil
-}
-
-func DefaultUDPProxies() []UDPProxyConfig {
+func validatePanel(p PanelConfig) error {
+	if err := validateHostPort("panel.listen", p.Listen, false); err != nil {
+		return err
+	}
+	if len(p.AllowedCIDRs) == 0 {
+		return errors.New("panel.allowed_cidrs is required")
+	}
+	for _, value := range p.AllowedCIDRs {
+		if _, _, err := net.ParseCIDR(value); err != nil {
+			return fmt.Errorf("panel.allowed_cidrs contains invalid CIDR %q: %w", value, err)
+		}
+	}
 	return nil
 }
 
@@ -320,6 +314,12 @@ func validateNetwork(n NetworkConfig) error {
 			return err
 		}
 	}
+	if n.HAProxyMaxConnections == nil {
+		return errors.New("network.haproxy_max_connections is required after applying defaults")
+	}
+	if *n.HAProxyMaxConnections < 0 {
+		return errors.New("network.haproxy_max_connections must be zero or positive")
+	}
 	switch n.QUICPolicy {
 	case "reject", "proxy":
 	default:
@@ -327,10 +327,10 @@ func validateNetwork(n NetworkConfig) error {
 	}
 	switch n.EncryptedDNSPolicy {
 	case "reject", "allow":
-		return nil
 	default:
 		return fmt.Errorf("network.encrypted_dns_policy must be reject or allow: %q", n.EncryptedDNSPolicy)
 	}
+	return nil
 }
 
 func validateLogging(l LoggingConfig) error {
@@ -451,130 +451,6 @@ func validateExit(exit ExitConfig) error {
 	}
 }
 
-func validateTCPProxies(proxies []TCPProxyConfig, cfg Config) error {
-	names := map[string]bool{}
-	clientPorts := map[int]string{}
-	listenPorts := reservedTCPPorts(cfg)
-	for _, proxy := range proxies {
-		if proxy.Name == "" {
-			return errors.New("tcp_proxy name is required")
-		}
-		if !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(proxy.Name) {
-			return fmt.Errorf("tcp_proxy %q: name may only contain letters, digits, dot, underscore, and dash", proxy.Name)
-		}
-		if names[proxy.Name] {
-			return fmt.Errorf("duplicate tcp_proxy name: %s", proxy.Name)
-		}
-		names[proxy.Name] = true
-		if err := validatePort("tcp_proxy "+proxy.Name+" client_port", proxy.ClientPort); err != nil {
-			return err
-		}
-		if err := validatePort("tcp_proxy "+proxy.Name+" listen_port", proxy.ListenPort); err != nil {
-			return err
-		}
-		if previous := clientPorts[proxy.ClientPort]; previous != "" {
-			return fmt.Errorf("tcp_proxy %q: client_port %d already used by %q", proxy.Name, proxy.ClientPort, previous)
-		}
-		clientPorts[proxy.ClientPort] = proxy.Name
-		if previous := listenPorts[proxy.ListenPort]; previous != "" {
-			return fmt.Errorf("tcp_proxy %q: listen_port %d conflicts with %s", proxy.Name, proxy.ListenPort, previous)
-		}
-		listenPorts[proxy.ListenPort] = "tcp_proxy " + proxy.Name
-		exit, ok := findExit(cfg.Exits, proxy.Exit)
-		if !ok {
-			return fmt.Errorf("tcp_proxy %q references unknown exit %q", proxy.Name, proxy.Exit)
-		}
-		if exit.Type == "shadowsocks-rust" && !exit.TCPEnabled() {
-			return fmt.Errorf("tcp_proxy %q references exit %q with tcp=false", proxy.Name, proxy.Exit)
-		}
-	}
-	return nil
-}
-
-func reservedTCPPorts(cfg Config) map[int]string {
-	ports := map[int]string{
-		80:                            "built-in tcp/80 redirect",
-		443:                           "built-in tcp/443 redirect",
-		cfg.Network.HTTPRedirectPort:  "network.http_redirect_port",
-		cfg.Network.HTTPSRedirectPort: "network.https_redirect_port",
-		cfg.Network.TCPRedirectPort:   "network.tcp_redirect_port",
-	}
-	for field, addr := range map[string]string{
-		"dns.listen_tcp":        cfg.DNS.ListenTCP,
-		"dns.listen_dot":        cfg.DNS.ListenDOT,
-		"dns.listen_public_dot": cfg.DNS.ListenPublicDOT,
-	} {
-		if port := hostPortNumber(addr); port != 0 {
-			ports[port] = field
-		}
-	}
-	return ports
-}
-
-func hostPortNumber(addr string) int {
-	if addr == "" {
-		return 0
-	}
-	_, port, err := net.SplitHostPort(addr)
-	if err != nil {
-		return 0
-	}
-	value, err := strconv.Atoi(port)
-	if err != nil {
-		return 0
-	}
-	return value
-}
-
-func validateUDPProxies(proxies []UDPProxyConfig, exits []ExitConfig) error {
-	names := map[string]bool{}
-	clientPorts := map[int]string{}
-	listenPorts := map[int]string{}
-	for _, proxy := range proxies {
-		if proxy.Name == "" {
-			return errors.New("udp_proxy name is required")
-		}
-		if !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(proxy.Name) {
-			return fmt.Errorf("udp_proxy %q: name may only contain letters, digits, dot, underscore, and dash", proxy.Name)
-		}
-		if names[proxy.Name] {
-			return fmt.Errorf("duplicate udp_proxy name: %s", proxy.Name)
-		}
-		names[proxy.Name] = true
-		if err := validatePort("udp_proxy "+proxy.Name+" client_port", proxy.ClientPort); err != nil {
-			return err
-		}
-		if err := validatePort("udp_proxy "+proxy.Name+" listen_port", proxy.ListenPort); err != nil {
-			return err
-		}
-		if previous := clientPorts[proxy.ClientPort]; previous != "" {
-			return fmt.Errorf("udp_proxy %q: client_port %d already used by %q", proxy.Name, proxy.ClientPort, previous)
-		}
-		clientPorts[proxy.ClientPort] = proxy.Name
-		if previous := listenPorts[proxy.ListenPort]; previous != "" {
-			return fmt.Errorf("udp_proxy %q: listen_port %d already used by %q", proxy.Name, proxy.ListenPort, previous)
-		}
-		listenPorts[proxy.ListenPort] = proxy.Name
-		host, _, err := proxy.TargetHostPort()
-		if err != nil {
-			return fmt.Errorf("udp_proxy %q: %w", proxy.Name, err)
-		}
-		if net.ParseIP(host) == nil {
-			if err := validateDomainName("udp_proxy "+proxy.Name+" target host", host); err != nil {
-				return err
-			}
-		}
-		exit, ok := findExit(exits, proxy.Exit)
-		if !ok {
-			return fmt.Errorf("udp_proxy %q references unknown exit %q", proxy.Name, proxy.Exit)
-		}
-		if exit.Type == "shadowsocks-rust" && !exit.UDPEnabled() {
-			return fmt.Errorf("udp_proxy %q references exit %q with udp=false", proxy.Name, proxy.Exit)
-		}
-	}
-	return nil
-}
-
 func validatePort(field string, port int) error {
 	if port <= 0 || port > 65535 {
 		return fmt.Errorf("%s is invalid: %d", field, port)
@@ -623,21 +499,6 @@ func validateSSKey(method, password string) error {
 		return fmt.Errorf("password key length for %s is %d bytes, want %d; generate one with: openssl rand -base64 %d", method, len(key), want, want)
 	}
 	return nil
-}
-
-func (p UDPProxyConfig) TargetHostPort() (string, int, error) {
-	host, port, err := net.SplitHostPort(p.Target)
-	if err != nil {
-		return "", 0, fmt.Errorf("target must be host:port: %w", err)
-	}
-	if host == "" {
-		return "", 0, errors.New("target host is required")
-	}
-	portNum, err := strconv.Atoi(port)
-	if err != nil || portNum <= 0 || portNum > 65535 {
-		return "", 0, fmt.Errorf("target port is invalid: %q", port)
-	}
-	return host, portNum, nil
 }
 
 func (l LoggingConfig) AccessEnabled() bool {

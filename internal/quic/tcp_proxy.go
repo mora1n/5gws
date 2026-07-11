@@ -23,63 +23,23 @@ const (
 	tcpSniffBytes = 4096
 )
 
-type TCPProxy struct {
-	cfg         config.TCPProxyConfig
-	app         config.Config
-	exit        config.ExitConfig
-	listener    *net.TCPListener
-	originalDst func(*net.TCPConn) (*net.TCPAddr, error)
-}
-
 type TCPGateway struct {
 	app         config.Config
-	rules       rules.Normalized
+	rules       *rules.Compiled
 	exit        config.ExitConfig
 	listener    *net.TCPListener
 	originalDst func(*net.TCPConn) (*net.TCPAddr, error)
-}
-
-func listenTCPProxies(cfg config.Config) ([]*TCPProxy, error) {
-	proxies := make([]*TCPProxy, 0, len(cfg.TCPProxies))
-	for _, proxyCfg := range cfg.TCPProxies {
-		proxy, err := listenTCPProxy(cfg, proxyCfg)
-		if err != nil {
-			closeTCPProxies(proxies)
-			return nil, err
-		}
-		proxies = append(proxies, proxy)
-	}
-	return proxies, nil
-}
-
-func listenTCPProxy(cfg config.Config, proxyCfg config.TCPProxyConfig) (*TCPProxy, error) {
-	exit, ok := cfg.ExitByName(proxyCfg.Exit)
-	if !ok {
-		return nil, fmt.Errorf("tcp proxy %q references unknown exit %q", proxyCfg.Name, proxyCfg.Exit)
-	}
-	if exit.Type == "shadowsocks-rust" && !exit.TCPEnabled() {
-		return nil, fmt.Errorf("tcp proxy %q references exit %q with tcp=false", proxyCfg.Name, proxyCfg.Exit)
-	}
-	addr := net.JoinHostPort("0.0.0.0", strconv.Itoa(proxyCfg.ListenPort))
-	tcpAddr, err := net.ResolveTCPAddr("tcp4", addr)
-	if err != nil {
-		return nil, fmt.Errorf("tcp proxy %q resolve listen address: %w", proxyCfg.Name, err)
-	}
-	listener, err := net.ListenTCP("tcp4", tcpAddr)
-	if err != nil {
-		return nil, fmt.Errorf("tcp proxy %q listen %s: %w", proxyCfg.Name, addr, err)
-	}
-	log.Printf("tcp proxy %s listening on %s client_port=%d exit=%s", proxyCfg.Name, listener.Addr(), proxyCfg.ClientPort, proxyCfg.Exit)
-	return &TCPProxy{cfg: proxyCfg, app: cfg, exit: exit, listener: listener, originalDst: getOriginalDst}, nil
-}
-
-func closeTCPProxies(proxies []*TCPProxy) {
-	for _, proxy := range proxies {
-		proxy.close()
-	}
 }
 
 func listenTCPGateway(cfg config.Config, norm rules.Normalized) (*TCPGateway, error) {
+	compiled, err := rules.Compile(norm)
+	if err != nil {
+		return nil, err
+	}
+	return listenTCPGatewayCompiled(cfg, compiled)
+}
+
+func listenTCPGatewayCompiled(cfg config.Config, compiled *rules.Compiled) (*TCPGateway, error) {
 	exit, ok := cfg.ExitByName(cfg.Routing.FallbackExit)
 	if !ok {
 		return nil, fmt.Errorf("tcp gateway references unknown fallback exit %q", cfg.Routing.FallbackExit)
@@ -97,7 +57,7 @@ func listenTCPGateway(cfg config.Config, norm rules.Normalized) (*TCPGateway, er
 		return nil, fmt.Errorf("tcp gateway listen %s: %w", addr, err)
 	}
 	log.Printf("tcp gateway listening on %s fallback_exit=%s", listener.Addr(), cfg.Routing.FallbackExit)
-	return &TCPGateway{app: cfg, rules: norm, exit: exit, listener: listener, originalDst: getOriginalDst}, nil
+	return &TCPGateway{app: cfg, rules: compiled, exit: exit, listener: listener, originalDst: getOriginalDst}, nil
 }
 
 func (g *TCPGateway) serve(ctx context.Context) error {
@@ -168,8 +128,8 @@ func (g *TCPGateway) handle(client *net.TCPConn) {
 	log.Printf("tcp gateway src=%s target=%s ended up=%d down=%d duration=%s", client.RemoteAddr(), target, up, down, time.Since(start).Round(time.Millisecond))
 }
 
-func selectTCPExit(cfg config.Config, norm rules.Normalized, host string) (config.ExitConfig, bool, error) {
-	if rule, ok := norm.MatchGatewayDomain(host); ok {
+func selectTCPExit(cfg config.Config, compiled *rules.Compiled, host string) (config.ExitConfig, bool, error) {
+	if rule, ok := compiled.MatchGatewayDomain(host); ok {
 		exit, exists := cfg.ExitByName(rule.Exit)
 		if !exists {
 			return config.ExitConfig{}, false, fmt.Errorf("unknown exit %q", rule.Exit)
@@ -187,67 +147,6 @@ func selectTCPExit(cfg config.Config, norm rules.Normalized, host string) (confi
 		return config.ExitConfig{}, false, fmt.Errorf("fallback exit %q has tcp=false", exit.Name)
 	}
 	return exit, false, nil
-}
-
-func (p *TCPProxy) serve(ctx context.Context) error {
-	for {
-		if err := p.listener.SetDeadline(time.Now().Add(time.Second)); err != nil {
-			return err
-		}
-		conn, err := p.listener.AcceptTCP()
-		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				continue
-			}
-			return fmt.Errorf("tcp proxy %s accept failed: %w", p.cfg.Name, err)
-		}
-		go p.handle(conn)
-	}
-}
-
-func (p *TCPProxy) handle(client *net.TCPConn) {
-	defer client.Close()
-	start := time.Now()
-	original, err := p.originalDst(client)
-	if err != nil {
-		log.Printf("tcp proxy %s src=%s rejected: original dst: %v", p.cfg.Name, client.RemoteAddr(), err)
-		return
-	}
-	targetHost := original.IP.String()
-	targetPort := original.Port
-	targetSource := "original_dst"
-	var initial []byte
-	if isGatewayIP(original.IP, p.app.Network.GatewayIP) {
-		initial, err = readInitialTCP(client)
-		if err != nil {
-			log.Printf("tcp proxy %s src=%s original=%s rejected: %v", p.cfg.Name, client.RemoteAddr(), original, err)
-			return
-		}
-		host, source := sniffTCPHost(initial)
-		if host == "" {
-			log.Printf("tcp proxy %s src=%s original=%s rejected: gateway original dst without HTTP Host or TLS SNI", p.cfg.Name, client.RemoteAddr(), original)
-			return
-		}
-		targetHost = host
-		targetPort = p.cfg.ClientPort
-		targetSource = source
-	}
-	backend, target, err := dialTCPBackend(targetHost, targetPort, p.exit)
-	if err != nil {
-		log.Printf("tcp proxy %s src=%s original=%s target=%s:%d exit=%q rejected: %v", p.cfg.Name, client.RemoteAddr(), original, targetHost, targetPort, p.exit.Name, err)
-		return
-	}
-	defer backend.Close()
-	log.Printf("tcp proxy %s src=%s original=%s target=%s source=%s exit=%q", p.cfg.Name, client.RemoteAddr(), original, target, targetSource, p.exit.Name)
-	clientReader := io.Reader(client)
-	if len(initial) > 0 {
-		clientReader = io.MultiReader(bytes.NewReader(initial), client)
-	}
-	up, down := relayTCP(client, clientReader, backend)
-	log.Printf("tcp proxy %s src=%s target=%s ended up=%d down=%d duration=%s", p.cfg.Name, client.RemoteAddr(), target, up, down, time.Since(start).Round(time.Millisecond))
 }
 
 func readInitialTCP(conn *net.TCPConn) ([]byte, error) {
@@ -554,10 +453,6 @@ func getOriginalDst(conn *net.TCPConn) (*net.TCPAddr, error) {
 	port := int((addr.Port&0xff)<<8 | addr.Port>>8)
 	ip := net.IPv4(addr.Addr[0], addr.Addr[1], addr.Addr[2], addr.Addr[3])
 	return &net.TCPAddr{IP: ip, Port: port}, nil
-}
-
-func (p *TCPProxy) close() {
-	_ = p.listener.Close()
 }
 
 func (g *TCPGateway) close() {
