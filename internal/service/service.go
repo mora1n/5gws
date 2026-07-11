@@ -15,6 +15,9 @@ type Service struct {
 	store      *store.Store
 	supervisor Runtime
 	applyMu    sync.Mutex
+	stateMu    sync.RWMutex
+	active     store.Revision
+	draft      store.Revision
 }
 
 type Runtime interface {
@@ -30,23 +33,31 @@ type Validation struct {
 	Bundle     store.Bundle    `json:"-"`
 }
 
-func New(state *store.Store, supervisor Runtime) *Service {
-	return &Service{store: state, supervisor: supervisor}
+func New(state *store.Store, supervisor Runtime, active, draft store.Revision) *Service {
+	return &Service{store: state, supervisor: supervisor, active: active, draft: draft}
 }
 
 func (s *Service) Store() *store.Store { return s.store }
 
 func (s *Service) Draft(ctx context.Context) (store.Revision, error) {
-	return s.store.Draft(ctx)
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.draft, nil
 }
 
 func (s *Service) Active(ctx context.Context) (store.Revision, error) {
-	return s.store.Active(ctx)
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.active, nil
 }
 
 func (s *Service) SaveDraft(ctx context.Context, bundle store.Bundle) (store.Revision, error) {
 	bundle.ResolvedRules = nil
-	return s.store.SaveDraft(ctx, bundle)
+	revision, err := s.store.SaveDraft(ctx, bundle)
+	if err == nil {
+		s.setDraft(revision)
+	}
+	return revision, err
 }
 
 func (s *Service) ValidateDraft(ctx context.Context) (Validation, error) {
@@ -66,9 +77,13 @@ func (s *Service) ValidateDraft(ctx context.Context) (Validation, error) {
 	if err != nil {
 		return Validation{}, err
 	}
+	s.setDraft(prepared)
 	root, err := s.supervisor.Prepare(ctx, prepared.ID, prepared.Bundle)
 	if err != nil {
 		_ = s.store.Fail(ctx, prepared.ID, err)
+		prepared.Status = "failed"
+		prepared.Error = err.Error()
+		s.setDraft(prepared)
 		return Validation{}, err
 	}
 	return Validation{RevisionID: prepared.ID, RuleCount: len(norm.Rules), Warnings: norm.Warnings, Root: root, Bundle: prepared.Bundle}, nil
@@ -89,19 +104,36 @@ func (s *Service) Apply(ctx context.Context) (store.Revision, error) {
 		_ = s.store.Fail(ctx, validated.RevisionID, err)
 		return store.Revision{}, err
 	}
-	if err := s.store.Activate(ctx, validated.RevisionID); err != nil {
+	activated, err := s.store.Activate(ctx, validated.RevisionID)
+	if err != nil {
 		oldRoot := filepath.Join(active.Bundle.Config.System.StateDir, "revisions", fmt.Sprint(active.ID))
 		if rollbackErr := s.supervisor.Apply(ctx, oldRoot, active.Bundle); rollbackErr != nil {
 			return store.Revision{}, errors.Join(err, fmt.Errorf("runtime rollback: %w", rollbackErr))
 		}
 		return store.Revision{}, err
 	}
-	return s.store.Active(ctx)
+	s.setActiveAndDraft(activated)
+	return activated, nil
 }
 
 func (s *Service) Rollback(ctx context.Context, revisionID int64) (store.Revision, error) {
-	if _, err := s.store.DraftFromRevision(ctx, revisionID); err != nil {
+	draft, err := s.store.DraftFromRevision(ctx, revisionID)
+	if err != nil {
 		return store.Revision{}, err
 	}
+	s.setDraft(draft)
 	return s.Apply(ctx)
+}
+
+func (s *Service) setDraft(revision store.Revision) {
+	s.stateMu.Lock()
+	s.draft = revision
+	s.stateMu.Unlock()
+}
+
+func (s *Service) setActiveAndDraft(revision store.Revision) {
+	s.stateMu.Lock()
+	s.active = revision
+	s.draft = revision
+	s.stateMu.Unlock()
 }

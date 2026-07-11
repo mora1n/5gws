@@ -194,26 +194,29 @@ func (s *Store) SaveDraft(ctx context.Context, bundle Bundle) (Revision, error) 
 	return rev, tx.Commit()
 }
 
-func (s *Store) Activate(ctx context.Context, revisionID int64) error {
+func (s *Store) Activate(ctx context.Context, revisionID int64) (Revision, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return Revision{}, err
 	}
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx, `UPDATE revisions SET status = 'superseded' WHERE status = 'active'`); err != nil {
-		return err
+		return Revision{}, err
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE revisions SET status = 'active', active_at = CURRENT_TIMESTAMP, error = NULL WHERE id = ?`, revisionID)
 	if err != nil {
-		return err
+		return Revision{}, err
 	}
 	if n, _ := result.RowsAffected(); n != 1 {
-		return fmt.Errorf("revision %d not found", revisionID)
+		return Revision{}, fmt.Errorf("revision %d not found", revisionID)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE app_state SET active_revision_id = ?, draft_revision_id = ? WHERE id = 1`, revisionID, revisionID); err != nil {
-		return err
+		return Revision{}, err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return Revision{}, err
+	}
+	return s.Active(ctx)
 }
 
 func (s *Store) Fail(ctx context.Context, revisionID int64, cause error) error {

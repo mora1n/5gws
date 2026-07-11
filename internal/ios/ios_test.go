@@ -19,14 +19,19 @@ func TestGenerateWritesDOTProfileOnly(t *testing.T) {
 			DOTDomain: "dot.example.com",
 		},
 		IOS: config.IOSConfig{
-			BaseURL:           "http://10.0.0.1:8088",
+			Enabled:           true,
+			BaseURL:           "https://dot.example.com",
 			Organization:      "5gws",
 			ProfileIdentifier: "dev.5gws.dot",
 		},
 	}
 
-	if _, err := Generate(dir, cfg); err != nil {
+	links, err := Generate(dir, cfg)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if links.ProfileURL != "https://dot.example.com/ios/5gws-dot.mobileconfig" || links.ProfileQR != "https://dot.example.com/ios/5gws-dot.png" {
+		t.Fatalf("links = %#v", links)
 	}
 
 	data, err := os.ReadFile(filepath.Join(dir, "5gws-dot.mobileconfig"))

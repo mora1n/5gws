@@ -72,6 +72,9 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	if cfg.Panel.Listen != "127.0.0.1:19443" {
 		t.Fatalf("panel.listen = %q", cfg.Panel.Listen)
 	}
+	if cfg.IOS.BaseURL != "https://dot.example.com" {
+		t.Fatalf("ios.base_url = %q", cfg.IOS.BaseURL)
+	}
 	if len(cfg.DNS.UpstreamsCN) == 0 {
 		t.Fatal("expected default CN upstreams")
 	}
@@ -142,6 +145,37 @@ func TestValidateRejectsInvalidLoggingLevel(t *testing.T) {
 	cfg.Logging.Level = "trace"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected invalid logging level to be rejected")
+	}
+}
+
+func TestValidateRequiresHTTPSIOSOriginWhenEnabled(t *testing.T) {
+	for _, value := range []string{"http://dot.example.com", "https://user@dot.example.com", "https://dot.example.com/profile", "https://dot.example.com?token=x"} {
+		cfg := validConfig()
+		cfg.IOS.Enabled = true
+		cfg.IOS.BaseURL = value
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("expected ios.base_url %q to be rejected", value)
+		}
+	}
+	cfg := validConfig()
+	cfg.IOS.Enabled = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid HTTPS iOS origin rejected: %v", err)
+	}
+}
+
+func TestApplyDefaultsMigratesLegacyIOSAddress(t *testing.T) {
+	cfg := validConfig()
+	cfg.IOS.BaseURL = "http://10.0.0.1:8088"
+	cfg.ApplyDefaults()
+	if cfg.IOS.BaseURL != "https://dot.example.com" {
+		t.Fatalf("ios.base_url = %q", cfg.IOS.BaseURL)
+	}
+
+	cfg.IOS.BaseURL = "https://profiles.example.net"
+	cfg.ApplyDefaults()
+	if cfg.IOS.BaseURL != "https://profiles.example.net" {
+		t.Fatalf("custom ios.base_url changed to %q", cfg.IOS.BaseURL)
 	}
 }
 

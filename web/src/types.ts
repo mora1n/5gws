@@ -17,3 +17,8 @@ export interface Bundle {
 }
 export interface Revision { id: number; status: string; bundle: Bundle; error?: string; created_at: string; active_at?: string }
 export interface Dashboard { version: string; active_revision: number; draft_revision: number; dirty: boolean; rules: number; processes: { name: string; pid: number }[] }
+export interface MatcherSummary { label: string; count: number; samples: string[] }
+export interface ActiveRuleSummary { name: string; target: string; matchers: MatcherSummary[] }
+export interface ActiveRuleGroup { key: string; title: string; rule_count: number; matcher_count: number; rules: ActiveRuleSummary[] }
+export interface ActiveRules { revision_id: number; active_at: string; rule_count: number; matcher_count: number; groups: ActiveRuleGroup[] }
+export interface IOSProfile { enabled: boolean; profile_url?: string; profile_qr?: string }

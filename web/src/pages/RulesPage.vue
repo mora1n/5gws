@@ -4,29 +4,30 @@
     <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
       <div>
         <h3 class="font-semibold">当前已应用规则</h3>
-        <div class="mt-1 text-sm text-base-content/60">active {{ active?.id ?? '-' }} · {{ activeTime }}</div>
+        <div class="mt-1 text-sm text-base-content/60">active {{ summary?.revision_id ?? '-' }} · {{ activeTime }}</div>
       </div>
-      <span class="badge badge-ghost">{{ activeRules.length }}</span>
+      <div class="flex items-center gap-2"><span class="badge badge-ghost">{{ summary?.rule_count ?? 0 }}</span><button class="btn btn-ghost btn-square btn-sm" title="刷新已应用规则" :disabled="loading" @click="loadActiveRules"><RefreshCw class="size-4" :class="{ 'animate-spin': loading }" /></button></div>
     </div>
-    <div v-if="activeGroups.length" class="space-y-3">
-      <details v-for="group in activeGroups" :key="group.key" class="border border-base-300 bg-base-100 p-3" :open="group.open">
+    <div v-if="loading && !summary" class="border border-dashed border-base-300 py-8 text-center text-sm text-base-content/50">正在加载已应用规则</div>
+    <div v-else-if="summary?.groups.length" class="space-y-3">
+      <details v-for="(group, groupIndex) in summary.groups" :key="group.key" class="border border-base-300 bg-base-100 p-3" :open="groupIndex < 2">
         <summary class="flex cursor-pointer list-none flex-wrap items-center gap-2">
           <span class="font-medium">{{ group.title }}</span>
-          <span class="badge badge-outline badge-sm">{{ group.rules.length }} 条规则</span>
-          <span class="badge badge-ghost badge-sm">{{ group.matcherCount }} 个匹配项</span>
+          <span class="badge badge-outline badge-sm">{{ group.rule_count }} 条规则</span>
+          <span class="badge badge-ghost badge-sm">{{ group.matcher_count }} 个匹配项</span>
         </summary>
         <div class="mt-3 space-y-2">
-          <div v-for="rule in group.rules" :key="`${rule.name}-${activeTarget(rule)}`" class="border border-base-300 bg-base-200/50 p-3">
+          <div v-for="rule in group.rules" :key="`${rule.name}-${rule.target}`" class="border border-base-300 bg-base-200/50 p-3">
             <div class="flex flex-wrap items-center gap-2">
               <span class="font-medium">{{ rule.name || '未命名规则' }}</span>
-              <span class="badge badge-ghost badge-sm">{{ activeTarget(rule) }}</span>
+              <span class="badge badge-ghost badge-sm">{{ rule.target }}</span>
             </div>
             <div class="mt-2 grid gap-2 lg:grid-cols-2">
-              <div v-for="matcher in matcherGroups(rule)" :key="matcher.label" class="min-w-0 rounded border border-base-300 bg-base-100 px-2 py-1.5 text-xs">
-                <div class="mb-1 flex items-center justify-between gap-2 text-base-content/60"><span>{{ matcher.label }}</span><span>{{ matcher.values.length }}</span></div>
+              <div v-for="matcher in rule.matchers" :key="matcher.label" class="min-w-0 rounded border border-base-300 bg-base-100 px-2 py-1.5 text-xs">
+                <div class="mb-1 flex items-center justify-between gap-2 text-base-content/60"><span>{{ matcher.label }}</span><span>{{ matcher.count }}</span></div>
                 <div class="flex flex-wrap gap-1">
                   <span v-for="value in matcher.samples" :key="value" class="max-w-full truncate rounded bg-base-200 px-1.5 py-0.5 mono">{{ value }}</span>
-                  <span v-if="matcher.extra > 0" class="rounded bg-base-200 px-1.5 py-0.5 text-base-content/50">还有 {{ matcher.extra }} 项</span>
+                  <span v-if="matcher.count > matcher.samples.length" class="rounded bg-base-200 px-1.5 py-0.5 text-base-content/50">还有 {{ matcher.count - matcher.samples.length }} 项</span>
                 </div>
               </div>
             </div>
@@ -53,50 +54,24 @@
   </section>
 </template>
 <script setup lang="ts">
-import { computed } from 'vue'; import { Plus, Trash2 } from '@lucide/vue'; import type { Bundle, ImportRule, Revision, Rule } from '@/types'
+import { computed, onMounted, ref, watch } from 'vue'; import { Plus, RefreshCw, Trash2 } from '@lucide/vue'; import { api } from '@/api'; import type { ActiveRules, Bundle, ImportRule, Rule } from '@/types'
 const bundle = defineModel<Bundle>('bundle', { required: true })
-const props = defineProps<{ active: Revision | null }>()
+const props = defineProps<{ activeRevision: number }>()
+const emit = defineEmits<{ error: [value: string] }>()
 if (!bundle.value.rules.rules) bundle.value.rules.rules = []
 if (!bundle.value.rules.imports) bundle.value.rules.imports = []
 const localRules = computed(() => bundle.value.rules.rules!); const imports = computed(() => bundle.value.rules.imports!)
-const activeRules = computed(() => props.active?.bundle.resolved_rules || [])
-const activeTime = computed(() => props.active?.active_at || props.active?.created_at || '-')
-const activeGroups = computed(() => groupActiveRules(activeRules.value))
+const summary = ref<ActiveRules | null>(null), loading = ref(false)
+const activeTime = computed(() => summary.value?.active_at ? new Date(summary.value.active_at).toLocaleString() : '-')
 const targets = computed(() => ['pool:cn', 'pool:overseas_private', 'pool:overseas_public', ...bundle.value.config.exits.map(e => `exit:${e.name}`)])
 function target(item: Rule | ImportRule) { return item.exit ? `exit:${item.exit}` : `pool:${item.dns_pool}` }
-function activeTarget(rule: Rule) { return rule.exit ? `exit:${rule.exit}` : rule.dns_pool ? `pool:${rule.dns_pool}` : '-' }
-function groupActiveRules(rules: Rule[]) {
-  const groups = new Map<string, { key: string; title: string; rules: Rule[]; matcherCount: number; open: boolean }>()
-  for (const rule of rules) {
-    const kind = rule.exit ? '出口规则' : rule.dns_pool ? 'DNS 解析池' : '未分类'
-    const target = activeTarget(rule)
-    const key = `${kind}:${target}`
-    if (!groups.has(key)) groups.set(key, { key, title: `${kind} · ${target}`, rules: [], matcherCount: 0, open: groups.size < 2 })
-    const group = groups.get(key)!
-    group.rules.push(rule)
-    group.matcherCount += matcherGroups(rule).reduce((sum, matcher) => sum + matcher.values.length, 0)
-  }
-  return [...groups.values()]
-}
-function matcherGroups(rule: Rule) {
-  return [
-    matcherGroup('domain', rule.domain),
-    matcherGroup('domain_suffix', rule.domain_suffix),
-    matcherGroup('domain_keyword', rule.domain_keyword),
-    matcherGroup('domain_regex', rule.domain_regex),
-    matcherGroup('ip_cidr', rule.ip_cidr),
-    matcherGroup('rule_set', rule.rule_set),
-  ].filter(group => group.values.length > 0)
-}
-function matcherGroup(label: string, values?: string[]) {
-  const list = values || []
-  const limit = 6
-  return { label, values: list, samples: list.slice(0, limit), extra: Math.max(0, list.length - limit) }
-}
+async function loadActiveRules(){ if(loading.value)return; loading.value=true; try{ summary.value=await api.activeRules() }catch(cause){ emit('error', cause instanceof Error ? cause.message : String(cause)) }finally{ loading.value=false } }
 function setTarget(item: Rule | ImportRule, value: string) { const [kind, name] = value.split(':'); item.exit = kind === 'exit' ? name : ''; item.dns_pool = kind === 'pool' ? name : '' }
 function list(value: string) { return value.split(',').map(v => v.trim()).filter(Boolean) }
 function targetChange(item: Rule | ImportRule, event: Event) { setTarget(item, (event.target as HTMLSelectElement).value) }
 function domainChange(rule: Rule, event: Event) { rule.domain_suffix = list((event.target as HTMLInputElement).value) }
 function addRule() { localRules.value.push({ name: `rule-${localRules.value.length + 1}`, exit: 'direct', dns_pool: '', domain_suffix: [] }) }
 function addImport() { imports.value.push({ name: `import-${imports.value.length + 1}`, type: 'sing-box', path: '', url: '', format: '', exit: 'direct', dns_pool: '' }) }
+onMounted(loadActiveRules)
+watch(() => props.activeRevision, (next, previous) => { if(next && next !== previous) loadActiveRules() })
 </script>

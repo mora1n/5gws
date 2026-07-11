@@ -41,6 +41,7 @@ func (s *Server) active(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) draft(w http.ResponseWriter, r *http.Request) {
 	revision, err := s.Service.Draft(r.Context())
+	revision.Bundle.ResolvedRules = nil
 	respond(w, revision, err)
 }
 
@@ -116,6 +117,44 @@ func (s *Server) iosProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	links, err := ios.Generate(revision.Bundle.Config.DNS.CertDir, revision.Bundle.Config)
-	respond(w, links, err)
+	writeJSON(w, http.StatusOK, ios.BuildLinks(revision.Bundle.Config))
+}
+
+func (s *Server) iosProfileFile(w http.ResponseWriter, r *http.Request) {
+	revision, ok := s.activeIOS(w, r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-apple-aspen-config")
+	w.Header().Set("Content-Disposition", `attachment; filename="5gws-dot.mobileconfig"`)
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(ios.Profile(revision.Bundle.Config))
+}
+
+func (s *Server) iosProfileQR(w http.ResponseWriter, r *http.Request) {
+	revision, ok := s.activeIOS(w, r)
+	if !ok {
+		return
+	}
+	data, err := ios.QRCode(revision.Bundle.Config)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = w.Write(data)
+}
+
+func (s *Server) activeIOS(w http.ResponseWriter, r *http.Request) (store.Revision, bool) {
+	revision, err := s.Service.Active(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return store.Revision{}, false
+	}
+	if !revision.Bundle.Config.IOS.Enabled {
+		http.NotFound(w, r)
+		return store.Revision{}, false
+	}
+	return revision, true
 }

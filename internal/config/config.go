@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -205,6 +206,16 @@ func (c *Config) ApplyDefaults() {
 	if c.DNS.KeyFile == "" {
 		c.DNS.KeyFile = c.System.ConfigDir + "/certs/privkey.pem"
 	}
+	legacyIOSURL := "http://" + c.Network.GatewayIP + ":8088"
+	if (c.IOS.BaseURL == "" || c.IOS.BaseURL == legacyIOSURL) && c.DNS.DOTDomain != "" {
+		c.IOS.BaseURL = "https://" + c.DNS.DOTDomain
+	}
+	if c.IOS.Organization == "" {
+		c.IOS.Organization = "5gws"
+	}
+	if c.IOS.ProfileIdentifier == "" {
+		c.IOS.ProfileIdentifier = "dev.5gws.dot"
+	}
 	if c.DNS.CacheSize == 0 {
 		c.DNS.CacheSize = 32768
 	}
@@ -270,6 +281,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := validateLogging(c.Logging); err != nil {
+		return err
+	}
+	if err := validateIOS(c.IOS); err != nil {
 		return err
 	}
 	seen := map[string]bool{}
@@ -340,6 +354,26 @@ func validateLogging(l LoggingConfig) error {
 	default:
 		return fmt.Errorf("logging.level must be debug, info, warn, or error: %q", l.Level)
 	}
+}
+
+func validateIOS(cfg IOSConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	parsed, err := url.Parse(cfg.BaseURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" {
+		return fmt.Errorf("ios.base_url must be an absolute HTTPS URL: %q", cfg.BaseURL)
+	}
+	if parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return fmt.Errorf("ios.base_url must be an HTTPS origin without credentials, path, query, or fragment: %q", cfg.BaseURL)
+	}
+	if cfg.Organization == "" {
+		return errors.New("ios.organization is required")
+	}
+	if matched, _ := regexp.MatchString(`^[A-Za-z0-9.-]+$`, cfg.ProfileIdentifier); !matched {
+		return fmt.Errorf("ios.profile_identifier is invalid: %q", cfg.ProfileIdentifier)
+	}
+	return nil
 }
 
 func validateDNS(d DNSConfig) error {

@@ -67,6 +67,9 @@ func TestInstallConfigUsesLocalPanelAndDisablesIOSByDefault(t *testing.T) {
 	if cfg.DNS.DOTDomain != "dns.example.com" {
 		t.Fatalf("DoT domain = %q", cfg.DNS.DOTDomain)
 	}
+	if cfg.IOS.BaseURL != "https://dns.example.com" {
+		t.Fatalf("iOS base URL = %q", cfg.IOS.BaseURL)
+	}
 }
 
 func TestInstallConfigCanEnableIOS(t *testing.T) {

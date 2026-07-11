@@ -36,6 +36,8 @@ func (s *Server) Router(local bool) http.Handler {
 	router.Get("/api/v1/health", s.health)
 	router.Get("/api/v1/bootstrap", s.bootstrapStatus)
 	router.Post("/api/v1/session", s.login)
+	router.Get("/ios/5gws-dot.mobileconfig", s.iosProfileFile)
+	router.Get("/ios/5gws-dot.png", s.iosProfileQR)
 	router.Group(func(router chi.Router) {
 		if local {
 			router.Use(localUser)
@@ -49,6 +51,7 @@ func (s *Server) Router(local bool) http.Handler {
 		router.Get("/api/v1/dashboard", s.dashboard)
 		router.Get("/api/v1/metrics", s.metrics)
 		router.Get("/api/v1/active", s.active)
+		router.Get("/api/v1/active/rules", s.activeRules)
 		router.Get("/api/v1/draft", s.draft)
 		router.Put("/api/v1/draft", s.saveDraft)
 		router.Post("/api/v1/draft/validate", s.validateDraft)

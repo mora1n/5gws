@@ -2,27 +2,24 @@ package ios
 
 import (
 	"fmt"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/morain/5gws/internal/config"
 	qrcode "github.com/skip2/go-qrcode"
 )
 
 type Links struct {
-	ProfileURL string
-	ProfileQR  string
+	Enabled    bool   `json:"enabled"`
+	ProfileURL string `json:"profile_url,omitempty"`
+	ProfileQR  string `json:"profile_qr,omitempty"`
 }
 
 func Generate(dir string, cfg config.Config) (Links, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Links{}, err
 	}
-	profile := mobileConfig(cfg)
-	if err := writeFile(filepath.Join(dir, "5gws-dot.mobileconfig"), []byte(profile), 0o644); err != nil {
+	if err := writeFile(filepath.Join(dir, "5gws-dot.mobileconfig"), Profile(cfg), 0o644); err != nil {
 		return Links{}, err
 	}
 	links := BuildLinks(cfg)
@@ -33,11 +30,23 @@ func Generate(dir string, cfg config.Config) (Links, error) {
 }
 
 func BuildLinks(cfg config.Config) Links {
+	if !cfg.IOS.Enabled {
+		return Links{Enabled: false}
+	}
 	base := trimSlash(cfg.IOS.BaseURL)
 	return Links{
-		ProfileURL: base + "/5gws-dot.mobileconfig",
-		ProfileQR:  base + "/5gws-dot.png",
+		Enabled:    cfg.IOS.Enabled,
+		ProfileURL: base + "/ios/5gws-dot.mobileconfig",
+		ProfileQR:  base + "/ios/5gws-dot.png",
 	}
+}
+
+func Profile(cfg config.Config) []byte {
+	return []byte(mobileConfig(cfg))
+}
+
+func QRCode(cfg config.Config) ([]byte, error) {
+	return qrcode.Encode(BuildLinks(cfg).ProfileURL, qrcode.Medium, 256)
 }
 
 func TerminalQRCode(value string) (string, error) {
@@ -53,38 +62,6 @@ func writeFile(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Chmod(path, mode)
-}
-
-func Serve(dir, listen, internalCIDR string) error {
-	if listen == "" {
-		return fmt.Errorf("ios.listen is required")
-	}
-	_, network, err := net.ParseCIDR(internalCIDR)
-	if err != nil {
-		return err
-	}
-	server := http.Server{
-		Addr:              listen,
-		Handler:           cidrOnly(network, http.FileServer(http.Dir(dir))),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	return server.ListenAndServe()
-}
-
-func cidrOnly(network *net.IPNet, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			http.Error(w, "invalid remote address", http.StatusForbidden)
-			return
-		}
-		ip := net.ParseIP(host)
-		if ip == nil || (!ip.IsLoopback() && !network.Contains(ip)) {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func mobileConfig(cfg config.Config) string {

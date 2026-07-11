@@ -12,10 +12,10 @@
       <div v-if="message" class="mx-4 mt-4 flex items-center gap-2 border px-3 py-2 text-sm sm:mx-6" :class="error ? 'border-error/40 bg-error/10 text-error' : 'border-success/40 bg-success/10 text-success'"><CircleAlert v-if="error" class="size-4 shrink-0" /><CircleCheck v-else class="size-4 shrink-0" /><span class="break-all">{{ message }}</span><button class="btn btn-ghost btn-square btn-xs ml-auto" title="关闭" @click="message = ''"><X class="size-4" /></button></div>
       <OverviewPage v-if="page === 'overview'" :dashboard="dashboard" @refresh="refresh" />
       <NetworkPage v-else-if="page === 'network' && draft" v-model:bundle="draft.bundle" />
-      <RulesPage v-else-if="page === 'rules' && draft" v-model:bundle="draft.bundle" :active="active" />
+      <RulesPage v-else-if="page === 'rules' && draft" v-model:bundle="draft.bundle" :active-revision="dashboard?.active_revision || 0" @error="show($event, true)" />
       <ExitsPage v-else-if="page === 'exits' && draft" v-model:bundle="draft.bundle" />
       <LogsPage v-else-if="page === 'logs'" @error="show($event, true)" />
-      <SettingsPage v-else-if="page === 'settings' && draft" v-model:bundle="draft.bundle" @imported="reload" @message="show($event, false)" @error="show($event, true)" @signed-out="authenticated = false" />
+      <SettingsPage v-else-if="page === 'settings' && draft" v-model:bundle="draft.bundle" :active-revision="dashboard?.active_revision || 0" @imported="reload" @message="show($event, false)" @error="show($event, true)" @signed-out="authenticated = false" />
     </main>
   </div>
 </template>
@@ -28,13 +28,13 @@ import AuthView from '@/components/AuthView.vue'; import AppNav from '@/componen
 import OverviewPage from '@/pages/OverviewPage.vue'; import NetworkPage from '@/pages/NetworkPage.vue'; import RulesPage from '@/pages/RulesPage.vue'; import ExitsPage from '@/pages/ExitsPage.vue'; import LogsPage from '@/pages/LogsPage.vue'; import SettingsPage from '@/pages/SettingsPage.vue'
 
 const loading=ref(true), authenticated=ref(false), needsSetup=ref(false), busy=ref(false), error=ref(false)
-const page=ref('overview'), message=ref(''), startupError=ref(''), dashboard=ref<Dashboard|null>(null), active=ref<Revision|null>(null), draft=ref<Revision|null>(null)
+const page=ref('overview'), message=ref(''), startupError=ref(''), dashboard=ref<Dashboard|null>(null), draft=ref<Revision|null>(null)
 const theme=ref<'light-neutral'|'dark-neutral'>(initialTheme())
 const titles:Record<string,string>={overview:'概览',network:'DNS 与网络',rules:'规则',exits:'出口',logs:'日志',settings:'设置'}
 const pageTitle=computed(()=>titles[page.value]||'5gws')
 const themeTitle=computed(()=>theme.value === 'light-neutral' ? '切换到深色模式' : '切换到浅色模式')
 async function start(){ authenticated.value=true; await reload() }
-async function reload(){ [dashboard.value,active.value,draft.value]=await Promise.all([api.dashboard(),api.active(),api.draft()]) }
+async function reload(){ [dashboard.value,draft.value]=await Promise.all([api.dashboard(),api.draft()]) }
 async function refresh(){ try{ await reload() }catch(cause){ show(cause,true) } }
 async function save(){ if(!draft.value)return; await action(async()=>{ draft.value=await api.saveDraft(draft.value!.bundle); await reload(); return '草稿已保存' }) }
 async function validate(){ await action(async()=>{ const result=await api.validate(); await reload(); return `预检通过，共 ${result.rule_count} 条规则` }) }

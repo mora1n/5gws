@@ -8,7 +8,7 @@ const bundle = {
     routing: { fallback_exit: 'direct' },
     dns: { binary: '/usr/local/bin/smartdns', dot_domain: 'dns.gateway.example.net', listen_udp: '0.0.0.0:1053', listen_tcp: '0.0.0.0:1053', listen_dot: '0.0.0.0:1853', listen_public_dot: '0.0.0.0:853', backend_resolvers: ['1.1.1.1:53', '8.8.8.8:53'], cert_dir: '/var/lib/5gws/ios', cert_file: '/etc/5gws/fullchain.pem', key_file: '/etc/5gws/privkey.pem', cache_size: 32768, upstreams_cn: ['223.5.5.5', '119.29.29.29'], upstreams_overseas_private: ['1.1.1.1'], upstreams_overseas_public: ['8.8.8.8'] },
     logging: { level: 'info', access: true },
-    ios: { enabled: true, listen: '0.0.0.0:8088', base_url: 'http://10.0.0.1:8088', organization: '5gws gateway operations', profile_identifier: 'dev.5gws.dot' },
+    ios: { enabled: true, listen: '0.0.0.0:8088', base_url: 'https://dns.gateway.example.net', organization: '5gws gateway operations', profile_identifier: 'dev.5gws.dot' },
     exits: [
       { name: 'direct', type: 'direct', fwmark: 0, server: '', server_port: 0, method: '', password: '', username: '', listen_address: '', listen_port: 0, tcp: true, udp: true, timeout_seconds: 300 },
       { name: 'tokyo-shadowsocks-production-long-name', type: 'shadowsocks-rust', fwmark: 0, server: 'edge.gateway.example.net', server_port: 8388, method: '2022-blake3-aes-128-gcm', password: 'secret', username: 'default', listen_address: '127.0.0.1', listen_port: 1080, tcp: true, udp: true, timeout_seconds: 300 },
@@ -47,9 +47,20 @@ async function mockAPI(page: Page) {
     if (path === '/api/v1/me') return json({ username: 'admin' })
     if (path === '/api/v1/dashboard') return json({ version: '0.2.0', active_revision: 7, draft_revision: 8, dirty: true, rules: 10023, processes: [{ name: 'smartdns', pid: 101 }, { name: 'haproxy', pid: 102 }, { name: 'sslocal', pid: 103 }, { name: 'gateway', pid: 100 }] })
     if (path === '/api/v1/active') return json(activeRevision)
+    if (path === '/api/v1/active/rules') return json({
+      revision_id: 7,
+      active_at: activeRevision.active_at,
+      rule_count: 2,
+      matcher_count: 9,
+      groups: [
+        { key: '出口规则:exit:tokyo', title: '出口规则 · exit:tokyo-shadowsocks-production-long-name', rule_count: 1, matcher_count: 2, rules: [{ name: 'applied-openai', target: 'exit:tokyo-shadowsocks-production-long-name', matchers: [{ label: 'domain_suffix', count: 2, samples: ['openai.com', 'chatgpt.com'] }] }] },
+        { key: 'DNS:pool:cn', title: 'DNS 解析池 · pool:cn', rule_count: 1, matcher_count: 7, rules: [{ name: 'applied-cn', target: 'pool:cn', matchers: [{ label: 'domain_suffix', count: 7, samples: ['example.cn', 'example.com.cn', 'service.cn', 'cdn.cn', 'portal.cn', 'static.cn'] }] }] },
+      ],
+    })
     if (path === '/api/v1/draft') return json(revision)
     if (path === '/api/v1/logs') return json({ logs: 'smartdns ready\nhaproxy ready\ngateway ready' })
     if (path === '/api/v1/logs/stream') return json({ error: 'stream should not be used' }, 500)
+    if (path === '/api/v1/ios/profile') return json({ enabled: true, profile_url: 'https://dns.gateway.example.net/ios/5gws-dot.mobileconfig', profile_qr: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' })
     if (path === '/api/v1/update') return json({ current: '0.2.0', latest: '0.2.0', available: false })
     return json({ error: `unhandled test route ${path}` }, 500)
   })
@@ -90,6 +101,10 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
 				await expect(page.getByText('最后刷新')).toBeVisible()
 				await page.getByTitle('刷新').click()
 				await expect(page.getByText('smartdns ready')).toBeVisible()
+			}
+			if (heading === '设置') {
+				await expect(page.getByAltText('iOS Profile 二维码')).toBeVisible()
+				await expect(page.getByRole('link', { name: '下载 Profile' })).toHaveAttribute('href', 'https://dns.gateway.example.net/ios/5gws-dot.mobileconfig')
 			}
 			const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
 			expect(overflow, `${heading} has horizontal page overflow`).toBeLessThanOrEqual(1)

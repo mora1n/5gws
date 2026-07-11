@@ -7,6 +7,7 @@
 - 提供 UDP/TCP DNS 与 DNS over TLS。
 - 按域名规则选择 direct 或 shadowsocks-rust 出口。
 - Web 面板支持规则、出口、DNS 上游、日志和更新。
+- 可选生成 iOS DNS over TLS Profile 和安装二维码。
 - 面板默认只监听本机 HTTP，由 Nginx 负责公网 HTTPS。
 - `5gws.service` 统一管理后台运行组件。
 
@@ -52,6 +53,8 @@ sudo bash install.sh -- \
 
 `--panel-listen` 可修改 Web 后端监听地址；默认是 `127.0.0.1:19443`。
 
+安装时增加 `--ios` 可启用 iOS Profile。公开地址默认使用 `https://<DoT 域名>`，不单独开放 HTTP 端口。
+
 ## 首次登录
 
 首次安装完成后，terminal 会显示管理员账号和随机密码：
@@ -83,6 +86,16 @@ location / {
     proxy_read_timeout 1h;
 }
 ```
+
+## iOS Profile
+
+启用并应用 iOS Profile 后，“设置”页面会显示二维码和下载链接：
+
+```text
+https://dns.example.com/ios/5gws-dot.mobileconfig
+```
+
+Profile 和二维码由 Web 后端通过 `/ios/` 提供，HTTPS 仍由上面的 Nginx 反代处理。无需监听或防火墙放行 `8088`。
 
 ## 面板使用
 

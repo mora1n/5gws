@@ -37,7 +37,7 @@ func TestRevisionLifecycle(t *testing.T) {
 	if err != nil || current.ID != active.ID {
 		t.Fatalf("active changed before apply: %+v, %v", current, err)
 	}
-	if err := s.Activate(ctx, draft.ID); err != nil {
+	if _, err := s.Activate(ctx, draft.ID); err != nil {
 		t.Fatal(err)
 	}
 	current, err = s.Active(ctx)

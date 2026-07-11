@@ -32,7 +32,7 @@ func TestValidateMarksFailedRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := &testRuntime{prepareErr: errors.New("haproxy validation failed")}
-	if _, err := New(state, runtime).ValidateDraft(ctx); err == nil {
+	if _, err := newTestService(t, state, runtime).ValidateDraft(ctx); err == nil {
 		t.Fatal("expected validation failure")
 	}
 	revisions, err := state.Revisions(ctx, 10)
@@ -62,7 +62,7 @@ func TestApplyDoesNotActivateRuntimeFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := &testRuntime{applyErr: errors.New("readiness failed")}
-	app := New(state, runtime)
+	app := newTestService(t, state, runtime)
 	if _, err := app.Apply(ctx); err == nil {
 		t.Fatal("expected apply failure")
 	}
@@ -73,6 +73,43 @@ func TestApplyDoesNotActivateRuntimeFailure(t *testing.T) {
 	if current.ID != active.ID {
 		t.Fatalf("active changed to %d", current.ID)
 	}
+}
+
+func TestServiceReadsPersistedSnapshotsWithoutDatabaseQueries(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	active, err := state.Initialize(ctx, serviceBundle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := New(state, &testRuntime{}, active, active)
+	if err := state.Close(); err != nil {
+		t.Fatal(err)
+	}
+	gotActive, err := app.Active(ctx)
+	if err != nil || gotActive.ID != active.ID {
+		t.Fatalf("cached active = %+v, %v", gotActive, err)
+	}
+	gotDraft, err := app.Draft(ctx)
+	if err != nil || gotDraft.ID != active.ID {
+		t.Fatalf("cached draft = %+v, %v", gotDraft, err)
+	}
+}
+
+func newTestService(t *testing.T, state *store.Store, runtime Runtime) *Service {
+	t.Helper()
+	active, err := state.Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := state.Draft(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return New(state, runtime, active, draft)
 }
 
 func serviceBundle() store.Bundle {

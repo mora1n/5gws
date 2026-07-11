@@ -1,7 +1,6 @@
 package quic
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -120,11 +119,16 @@ func (g *TCPGateway) handle(client *net.TCPConn) {
 	}
 	defer backend.Close()
 	log.Printf("tcp gateway src=%s original=%s target=%s source=%s exit=%q", client.RemoteAddr(), original, target, targetSource, exit.Name)
-	clientReader := io.Reader(client)
+	var initialBytes int64
 	if len(initial) > 0 {
-		clientReader = io.MultiReader(bytes.NewReader(initial), client)
+		initialBytes, err = writeInitial(backend, initial)
+		if err != nil {
+			log.Printf("tcp gateway src=%s target=%s initial write failed: %v", client.RemoteAddr(), target, err)
+			return
+		}
 	}
-	up, down := relayTCP(client, clientReader, backend)
+	up, down := relayTCP(client, backend)
+	up += initialBytes
 	log.Printf("tcp gateway src=%s target=%s ended up=%d down=%d duration=%s", client.RemoteAddr(), target, up, down, time.Since(start).Round(time.Millisecond))
 }
 
@@ -392,10 +396,25 @@ type tcpCopyResult struct {
 	err  error
 }
 
-func relayTCP(client net.Conn, clientReader io.Reader, backend net.Conn) (int64, int64) {
+func writeInitial(backend net.Conn, initial []byte) (int64, error) {
+	written := 0
+	for written < len(initial) {
+		n, err := backend.Write(initial[written:])
+		written += n
+		if err != nil {
+			return int64(written), err
+		}
+		if n == 0 {
+			return int64(written), io.ErrUnexpectedEOF
+		}
+	}
+	return int64(written), nil
+}
+
+func relayTCP(client net.Conn, backend net.Conn) (int64, int64) {
 	done := make(chan tcpCopyResult, 2)
 	go func() {
-		n, err := io.Copy(backend, clientReader)
+		n, err := io.Copy(backend, client)
 		closeWrite(backend)
 		done <- tcpCopyResult{name: "up", n: n, err: err}
 	}()

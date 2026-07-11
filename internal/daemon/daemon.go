@@ -46,6 +46,10 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	if len(active.Bundle.ResolvedRules) == 0 && len(active.Bundle.Rules.Rules)+len(active.Bundle.Rules.Imports) > 0 {
 		return errors.New("active revision has no resolved rules; run 5gws install again")
 	}
+	draft, err := state.Draft(ctx)
+	if err != nil {
+		return err
+	}
 	logs := engine.NewLogBuffer(2 << 20)
 	supervisor := engine.NewSupervisor(active.Bundle.Config.System.StateDir, logs)
 	root, err := supervisor.Prepare(ctx, active.ID, active.Bundle)
@@ -56,9 +60,8 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		return err
 	}
 	defer supervisor.Stop()
-	go collectMetrics(ctx, state, supervisor)
-
-	application := service.New(state, supervisor)
+	application := service.New(state, supervisor, active, draft)
+	go collectMetrics(ctx, application, supervisor)
 	server := &api.Server{
 		Service: application, Auth: auth.New(state.DB(), 24*time.Hour), Supervisor: supervisor,
 		Web: webassets.FS(), Version: opts.Version,
@@ -122,18 +125,18 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	return nil
 }
 
-func collectMetrics(ctx context.Context, state *store.Store, supervisor *engine.Supervisor) {
+func collectMetrics(ctx context.Context, application *service.Service, supervisor *engine.Supervisor) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
-		active, err := state.Active(ctx)
+		active, err := application.Active(ctx)
 		if err != nil {
 			if ctx.Err() == nil {
 				log.Printf("metrics active revision: %v", err)
 			}
 		} else {
 			metric := engine.CollectMetrics(supervisor.Status(), active.Bundle.Config.DNS.ListenUDP)
-			if err := state.PutMetric(ctx, metric.Timestamp, metric); err != nil && ctx.Err() == nil {
+			if err := application.Store().PutMetric(ctx, metric.Timestamp, metric); err != nil && ctx.Err() == nil {
 				log.Printf("metrics: %v", err)
 			}
 		}

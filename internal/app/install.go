@@ -128,7 +128,7 @@ func installConfig(gateway, cidr, iface, domain, panelListen string, iosEnabled 
 		Network: config.NetworkConfig{GatewayIP: gateway, InternalCIDR: cidr, IngressIface: iface},
 		DNS:     config.DNSConfig{DOTDomain: strings.ToLower(strings.TrimSuffix(domain, "."))},
 		Logging: config.LoggingConfig{Level: "info", Access: &access},
-		IOS:     config.IOSConfig{Enabled: iosEnabled, Listen: "0.0.0.0:8088", BaseURL: "http://" + gateway + ":8088", Organization: "5gws", ProfileIdentifier: "dev.5gws.dot"},
+		IOS:     config.IOSConfig{Enabled: iosEnabled, BaseURL: "https://" + strings.ToLower(strings.TrimSuffix(domain, ".")), Organization: "5gws", ProfileIdentifier: "dev.5gws.dot"},
 		Exits:   []config.ExitConfig{{Name: "direct", Type: "direct"}},
 	}
 	cfg.ApplyDefaults()
