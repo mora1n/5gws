@@ -25,6 +25,7 @@ export const api = {
   logout: () => request('/api/v1/session', { method: 'DELETE' }),
   me: () => request<{ username: string }>('/api/v1/me'),
   dashboard: () => request<Dashboard>('/api/v1/dashboard'),
+  active: () => request<Revision>('/api/v1/active'),
   draft: () => request<Revision>('/api/v1/draft'),
   saveDraft: (bundle: Bundle) => request<Revision>('/api/v1/draft', { method: 'PUT', body: JSON.stringify(bundle) }),
   validate: () => request<{ revision_id: number; rule_count: number; warnings: unknown[] }>('/api/v1/draft/validate', { method: 'POST' }),

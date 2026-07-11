@@ -1,21 +1,21 @@
 # 5gws
 
-面向固定内网源 IP 场景的 DNS 与域名分流网关。客户端只需配置系统 DNS 或 DoT，5gws 即可根据来源网段和域名选择直连或 Shadowsocks 出口，并接管需要经过网关的 TCP/QUIC 流量。
+5gws 是面向固定客户端网段的 DNS 与域名分流网关。客户端配置系统 DNS 或 DNS over TLS 后，5gws 根据域名规则选择直连或 Shadowsocks 出口，并把需要经过网关的 TCP/QUIC 流量接入对应出口。
 
 ## 功能
 
-- 提供 UDP/TCP DNS 与 DNS over TLS，支持规则缓存和多上游解析。
-- 按域名将流量分配至 direct 或 shadowsocks-rust 出口。
-- 提供 Vue 3 + DaisyUI Web 面板，用于配置、状态监控、日志和更新。
-- 通过 Unix socket 管理本机 CLI，面板默认仅监听 localhost。
-- 以单个 `5gws.service` 守护进程管理所有运行组件。
+- 提供 UDP/TCP DNS 与 DNS over TLS。
+- 按域名规则选择 direct 或 shadowsocks-rust 出口。
+- Web 面板支持规则、出口、DNS 上游、日志、版本历史和更新。
+- 面板默认只监听本机 HTTP，由 Nginx 负责公网 HTTPS。
+- `5gws.service` 统一管理后台运行组件。
 
 ## 系统要求
 
 - Linux amd64 与 systemd
 - root 权限
 - 一个已解析到服务器的 DoT 域名
-- 首次申请 TLS 证书时 TCP/80 可从公网访问
+- 首次申请证书时，公网 TCP/80 需要能访问到服务器
 
 ## 安装
 
@@ -23,14 +23,14 @@
 wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash
 ```
 
-安装向导会询问以下内容：
+安装向导会询问：
 
 | 配置项 | 用途 | 示例 |
 |---|---|---|
 | 网关 IPv4 | 分流域名返回给客户端的服务器地址 | `203.0.113.10` |
 | 客户端网段 | 允许使用网关的客户端来源 CIDR | `172.22.0.0/16` |
-| 入口网卡 | 接收客户端流量的服务器网络接口 | `eth0` |
-| DoT 域名 | DNS over TLS 和面板使用的证书域名 | `dns.example.com` |
+| 入口网卡 | 接收客户端流量的服务器网卡 | `eth0` |
+| DoT 域名 | DNS over TLS 使用的域名 | `dns.example.com` |
 
 安装指定版本：
 
@@ -50,11 +50,26 @@ sudo bash install.sh -- \
   --panel-listen 127.0.0.1:19443
 ```
 
-iOS 配置描述文件默认关闭，需要时在安装参数中添加 `--ios`。
+`--panel-listen` 可修改 Web 后端监听地址；默认是 `127.0.0.1:19443`。
+
+## 首次登录
+
+首次安装完成后，terminal 会显示管理员账号和随机密码：
+
+```text
+Username: admin
+Password: <随机密码>
+```
+
+如果需要重置管理员密码，在服务器上运行：
+
+```sh
+sudo 5gws reset-admin
+```
 
 ## Nginx 反代
 
-Web 面板默认仅监听 `http://127.0.0.1:19443`。
+Web 后端默认只监听本机 HTTP。公网 HTTPS 交给 Nginx 处理：
 
 ```nginx
 location / {
@@ -69,20 +84,13 @@ location / {
 }
 ```
 
-## 首次登录
+## 面板使用
 
-首次安装完成会在当前 terminal 显示管理员账号：
-
-```text
-Username: admin
-Password: <随机密码>
-```
-
-如果已有实例还没有管理员，或需要重置管理员密码，在服务器终端运行：
-
-```sh
-sudo 5gws reset-admin
-```
+- 在“规则与导入”中查看当前已应用规则，并编辑草稿规则。
+- 在“出口”中添加或修改 Shadowsocks 出口。
+- 在“DNS 与网络”中配置网关地址、客户端网段、DNS 上游、默认出口和策略。
+- 修改后先点“保存”，需要正式生效时再点“应用”。
+- 在“日志与诊断”和“版本历史”中查看运行状态、错误和回滚入口。
 
 ## 常用命令
 
@@ -90,12 +98,11 @@ sudo 5gws reset-admin
 sudo 5gws status
 sudo 5gws doctor
 sudo 5gws logs
-sudo 5gws apply
-sudo 5gws rollback REVISION_ID
+sudo 5gws reset-admin
 sudo 5gws update
 ```
 
-## 卸载
+卸载：
 
 ```sh
 sudo 5gws uninstall --purge --yes
@@ -112,7 +119,7 @@ make build VERSION=dev
 make release VERSION=<version>
 ```
 
-Release 包含静态二进制 `5gws-linux-amd64` 及其 SHA-256 校验文件。
+Release 包含静态二进制和 SHA-256 校验文件。
 
 ## License
 

@@ -13,6 +13,7 @@ export interface Bundle {
     exits: Exit[]
   }
   rules: { imports: ImportRule[] | null; rules: Rule[] | null }
+  resolved_rules?: Rule[] | null
 }
 export interface Revision { id: number; status: string; bundle: Bundle; error?: string; created_at: string; active_at?: string }
 export interface Dashboard { version: string; active_revision: number; draft_revision: number; dirty: boolean; rules: number; processes: { name: string; pid: number }[] }

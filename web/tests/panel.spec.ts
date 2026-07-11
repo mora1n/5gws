@@ -21,6 +21,19 @@ const bundle = {
 }
 
 const revision = { id: 8, status: 'draft', bundle, created_at: '2026-07-11T12:00:00Z' }
+const activeRevision = {
+	...revision,
+	id: 7,
+	status: 'active',
+	active_at: '2026-07-11T12:05:00Z',
+	bundle: {
+		...bundle,
+		resolved_rules: [
+			{ name: 'applied-openai', exit: 'tokyo-shadowsocks-production-long-name', dns_pool: '', domain_suffix: ['openai.com', 'chatgpt.com'] },
+			{ name: 'applied-cn', exit: '', dns_pool: 'cn', domain_suffix: ['example.cn'] },
+		],
+	},
+}
 const pages = [
 	['概览', '概览', '运行概览'], ['DNS 与网络', 'DNS', 'DNS 与网络'], ['规则与导入', '规则', '规则与导入'], ['出口', '出口', '出口'],
 	['日志与诊断', '日志', '日志与诊断'], ['版本历史', '历史', '版本历史'], ['设置', '设置', '设置'],
@@ -33,6 +46,7 @@ async function mockAPI(page: Page) {
     if (path === '/api/v1/bootstrap') return json({ needs_setup: false })
     if (path === '/api/v1/me') return json({ username: 'admin' })
     if (path === '/api/v1/dashboard') return json({ version: '0.2.0', active_revision: 7, draft_revision: 8, dirty: true, rules: 10023, processes: [{ name: 'smartdns', pid: 101 }, { name: 'haproxy', pid: 102 }, { name: 'sslocal', pid: 103 }, { name: 'gateway', pid: 100 }] })
+    if (path === '/api/v1/active') return json(activeRevision)
     if (path === '/api/v1/draft') return json(revision)
     if (path === '/api/v1/revisions') return json({ revisions: [{ ...revision, id: 7, status: 'active' }, { ...revision, id: 6, status: 'superseded' }] })
     if (path === '/api/v1/logs') return json({ logs: 'smartdns ready\nhaproxy ready\ngateway ready' })
@@ -56,7 +70,18 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
       const button = page.getByRole('button', { name: nav, exact: true }).filter({ visible: true })
 			if (nav !== '概览') await button.click()
 			await expect(page.getByRole('heading', { name: heading, exact: true }).first()).toBeVisible()
-			if (heading === 'DNS 与网络') await expect(page.getByLabel('HAProxy 最大连接数')).toHaveValue('16384')
+			if (heading === 'DNS 与网络') {
+				await expect(page.getByLabel('HAProxy 最大连接数')).toBeHidden()
+				await expect(page.getByLabel('缓存条目')).toBeHidden()
+				await expect(page.getByLabel('后端解析器')).toBeHidden()
+				await expect(page.getByLabel('公网 DoT 监听')).toBeHidden()
+				await expect(page.getByLabel('公网海外上游')).toBeVisible()
+			}
+			if (heading === '规则与导入') {
+				await expect(page.getByText('当前已应用规则')).toBeVisible()
+				await expect(page.getByText('applied-openai')).toBeVisible()
+				await expect(page.getByText('domain_suffix:openai.com')).toBeVisible()
+			}
 			const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
 			expect(overflow, `${heading} has horizontal page overflow`).toBeLessThanOrEqual(1)
 		}
