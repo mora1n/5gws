@@ -1,6 +1,6 @@
 <template>
   <div class="panel-section"><h2 class="text-lg font-semibold">运行概览</h2></div>
-  <div class="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-4 sm:p-6">
+  <div class="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3 sm:p-6">
     <div v-for="stat in stats" :key="stat.label" class="border border-base-300 bg-base-100 p-4"><div class="text-sm text-base-content/60">{{ stat.label }}</div><div class="mt-2 text-2xl font-semibold">{{ stat.value }}</div></div>
   </div>
   <section class="panel-section"><div class="mb-3 flex items-center justify-between"><h3 class="font-semibold">受管进程</h3><button class="btn btn-ghost btn-square btn-sm" title="刷新" @click="$emit('refresh')"><RefreshCw class="size-4" /></button></div>
@@ -10,5 +10,5 @@
 <script setup lang="ts">
 import { computed } from 'vue'; import { RefreshCw } from '@lucide/vue'; import type { Dashboard } from '@/types'
 const props = defineProps<{ dashboard: Dashboard | null }>(); defineEmits<{ refresh: [] }>()
-const stats = computed(() => [{ label: '版本', value: props.dashboard?.version || '-' }, { label: '活动版本', value: props.dashboard?.active_revision ?? '-' }, { label: '规则', value: props.dashboard?.rules ?? '-' }, { label: '配置状态', value: props.dashboard?.dirty ? '有草稿' : '已同步' }])
+const stats = computed(() => [{ label: '版本', value: props.dashboard?.version || '-' }, { label: '活动版本', value: props.dashboard?.active_revision ?? '-' }, { label: '规则', value: props.dashboard?.rules ?? '-' }])
 </script>

@@ -30,8 +30,6 @@ export const api = {
   saveDraft: (bundle: Bundle) => request<Revision>('/api/v1/draft', { method: 'PUT', body: JSON.stringify(bundle) }),
   validate: () => request<{ revision_id: number; rule_count: number; warnings: unknown[] }>('/api/v1/draft/validate', { method: 'POST' }),
   apply: () => request<Revision>('/api/v1/apply', { method: 'POST' }),
-  revisions: () => request<{ revisions: Revision[] }>('/api/v1/revisions'),
-  rollback: (id: number) => request<Revision>(`/api/v1/revisions/${id}/rollback`, { method: 'POST' }),
   logs: () => request<{ logs: string }>('/api/v1/logs?lines=500'),
   diagnostics: () => request<{ processes: { name: string; pid: number }[]; logs: string }>('/api/v1/diagnostics'),
   ios: () => request<Record<string, string>>('/api/v1/ios/profile'),

@@ -1,5 +1,5 @@
 <template>
-  <div class="panel-section flex items-center justify-between"><h2 class="text-lg font-semibold">规则与导入</h2><button class="btn btn-neutral btn-sm" @click="addRule"><Plus class="size-4" />规则</button></div>
+  <div class="panel-section flex items-center justify-between"><h2 class="text-lg font-semibold">规则</h2><button class="btn btn-neutral btn-sm" @click="addRule"><Plus class="size-4" />规则</button></div>
   <section class="panel-section">
     <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
       <div>
@@ -8,16 +8,31 @@
       </div>
       <span class="badge badge-ghost">{{ activeRules.length }}</span>
     </div>
-    <div v-if="activeRules.length" class="space-y-2">
-      <div v-for="rule in activeRules" :key="`${rule.name}-${activeTarget(rule)}`" class="border border-base-300 bg-base-100 p-3">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="font-medium">{{ rule.name || '未命名规则' }}</span>
-          <span class="badge badge-outline badge-sm">{{ activeTarget(rule) }}</span>
+    <div v-if="activeGroups.length" class="space-y-3">
+      <details v-for="group in activeGroups" :key="group.key" class="border border-base-300 bg-base-100 p-3" :open="group.open">
+        <summary class="flex cursor-pointer list-none flex-wrap items-center gap-2">
+          <span class="font-medium">{{ group.title }}</span>
+          <span class="badge badge-outline badge-sm">{{ group.rules.length }} 条规则</span>
+          <span class="badge badge-ghost badge-sm">{{ group.matcherCount }} 个匹配项</span>
+        </summary>
+        <div class="mt-3 space-y-2">
+          <div v-for="rule in group.rules" :key="`${rule.name}-${activeTarget(rule)}`" class="border border-base-300 bg-base-200/50 p-3">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="font-medium">{{ rule.name || '未命名规则' }}</span>
+              <span class="badge badge-ghost badge-sm">{{ activeTarget(rule) }}</span>
+            </div>
+            <div class="mt-2 grid gap-2 lg:grid-cols-2">
+              <div v-for="matcher in matcherGroups(rule)" :key="matcher.label" class="min-w-0 rounded border border-base-300 bg-base-100 px-2 py-1.5 text-xs">
+                <div class="mb-1 flex items-center justify-between gap-2 text-base-content/60"><span>{{ matcher.label }}</span><span>{{ matcher.values.length }}</span></div>
+                <div class="flex flex-wrap gap-1">
+                  <span v-for="value in matcher.samples" :key="value" class="max-w-full truncate rounded bg-base-200 px-1.5 py-0.5 mono">{{ value }}</span>
+                  <span v-if="matcher.extra > 0" class="rounded bg-base-200 px-1.5 py-0.5 text-base-content/50">还有 {{ matcher.extra }} 项</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
-        <div class="mt-2 flex flex-wrap gap-2 text-xs">
-          <span v-for="item in matchers(rule)" :key="item" class="rounded border border-base-300 px-2 py-1 mono text-base-content/70">{{ item }}</span>
-        </div>
-      </div>
+      </details>
     </div>
     <div v-else class="border border-dashed border-base-300 py-8 text-center text-sm text-base-content/50">当前 revision 没有已解析规则数据</div>
   </section>
@@ -46,20 +61,38 @@ if (!bundle.value.rules.imports) bundle.value.rules.imports = []
 const localRules = computed(() => bundle.value.rules.rules!); const imports = computed(() => bundle.value.rules.imports!)
 const activeRules = computed(() => props.active?.bundle.resolved_rules || [])
 const activeTime = computed(() => props.active?.active_at || props.active?.created_at || '-')
+const activeGroups = computed(() => groupActiveRules(activeRules.value))
 const targets = computed(() => ['pool:cn', 'pool:overseas_private', 'pool:overseas_public', ...bundle.value.config.exits.map(e => `exit:${e.name}`)])
 function target(item: Rule | ImportRule) { return item.exit ? `exit:${item.exit}` : `pool:${item.dns_pool}` }
 function activeTarget(rule: Rule) { return rule.exit ? `exit:${rule.exit}` : rule.dns_pool ? `pool:${rule.dns_pool}` : '-' }
-function matchers(rule: Rule) {
-  return [
-    ...formatList('domain', rule.domain),
-    ...formatList('domain_suffix', rule.domain_suffix),
-    ...formatList('domain_keyword', rule.domain_keyword),
-    ...formatList('domain_regex', rule.domain_regex),
-    ...formatList('ip_cidr', rule.ip_cidr),
-    ...formatList('rule_set', rule.rule_set),
-  ]
+function groupActiveRules(rules: Rule[]) {
+  const groups = new Map<string, { key: string; title: string; rules: Rule[]; matcherCount: number; open: boolean }>()
+  for (const rule of rules) {
+    const kind = rule.exit ? '出口规则' : rule.dns_pool ? 'DNS 解析池' : '未分类'
+    const target = activeTarget(rule)
+    const key = `${kind}:${target}`
+    if (!groups.has(key)) groups.set(key, { key, title: `${kind} · ${target}`, rules: [], matcherCount: 0, open: groups.size < 2 })
+    const group = groups.get(key)!
+    group.rules.push(rule)
+    group.matcherCount += matcherGroups(rule).reduce((sum, matcher) => sum + matcher.values.length, 0)
+  }
+  return [...groups.values()]
 }
-function formatList(label: string, values?: string[]) { return (values || []).map(value => `${label}:${value}`) }
+function matcherGroups(rule: Rule) {
+  return [
+    matcherGroup('domain', rule.domain),
+    matcherGroup('domain_suffix', rule.domain_suffix),
+    matcherGroup('domain_keyword', rule.domain_keyword),
+    matcherGroup('domain_regex', rule.domain_regex),
+    matcherGroup('ip_cidr', rule.ip_cidr),
+    matcherGroup('rule_set', rule.rule_set),
+  ].filter(group => group.values.length > 0)
+}
+function matcherGroup(label: string, values?: string[]) {
+  const list = values || []
+  const limit = 6
+  return { label, values: list, samples: list.slice(0, limit), extra: Math.max(0, list.length - limit) }
+}
 function setTarget(item: Rule | ImportRule, value: string) { const [kind, name] = value.split(':'); item.exit = kind === 'exit' ? name : ''; item.dns_pool = kind === 'pool' ? name : '' }
 function list(value: string) { return value.split(',').map(v => v.trim()).filter(Boolean) }
 function targetChange(item: Rule | ImportRule, event: Event) { setTarget(item, (event.target as HTMLSelectElement).value) }

@@ -30,13 +30,13 @@ const activeRevision = {
 		...bundle,
 		resolved_rules: [
 			{ name: 'applied-openai', exit: 'tokyo-shadowsocks-production-long-name', dns_pool: '', domain_suffix: ['openai.com', 'chatgpt.com'] },
-			{ name: 'applied-cn', exit: '', dns_pool: 'cn', domain_suffix: ['example.cn'] },
+			{ name: 'applied-cn', exit: '', dns_pool: 'cn', domain_suffix: ['example.cn', 'example.com.cn', 'service.cn', 'cdn.cn', 'portal.cn', 'static.cn', 'extra.cn'] },
 		],
 	},
 }
 const pages = [
-	['概览', '概览', '运行概览'], ['DNS 与网络', 'DNS', 'DNS 与网络'], ['规则与导入', '规则', '规则与导入'], ['出口', '出口', '出口'],
-	['日志与诊断', '日志', '日志与诊断'], ['版本历史', '历史', '版本历史'], ['设置', '设置', '设置'],
+	['概览', '概览', '运行概览'], ['DNS 与网络', 'DNS', 'DNS 与网络'], ['规则', '规则', '规则'], ['出口', '出口', '出口'],
+	['日志', '日志', '日志'], ['设置', '设置', '设置'],
 ] as const
 
 async function mockAPI(page: Page) {
@@ -48,9 +48,8 @@ async function mockAPI(page: Page) {
     if (path === '/api/v1/dashboard') return json({ version: '0.2.0', active_revision: 7, draft_revision: 8, dirty: true, rules: 10023, processes: [{ name: 'smartdns', pid: 101 }, { name: 'haproxy', pid: 102 }, { name: 'sslocal', pid: 103 }, { name: 'gateway', pid: 100 }] })
     if (path === '/api/v1/active') return json(activeRevision)
     if (path === '/api/v1/draft') return json(revision)
-    if (path === '/api/v1/revisions') return json({ revisions: [{ ...revision, id: 7, status: 'active' }, { ...revision, id: 6, status: 'superseded' }] })
     if (path === '/api/v1/logs') return json({ logs: 'smartdns ready\nhaproxy ready\ngateway ready' })
-    if (path === '/api/v1/logs/stream') return route.fulfill({ contentType: 'text/event-stream', body: 'data: {"logs":"smartdns ready\\nhaproxy ready"}\n\n' })
+    if (path === '/api/v1/logs/stream') return json({ error: 'stream should not be used' }, 500)
     if (path === '/api/v1/update') return json({ current: '0.2.0', latest: '0.2.0', available: false })
     return json({ error: `unhandled test route ${path}` }, 500)
   })
@@ -64,6 +63,10 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
     await mockAPI(page)
     await page.goto('/')
     await expect(page.getByRole('heading', { name: '运行概览' })).toBeVisible()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', /neutral/)
+    await expect(page.getByText('配置状态')).toBeHidden()
+    await expect(page.getByText('有草稿')).toBeHidden()
+    await expect(page.getByRole('button', { name: /历史/ })).toBeHidden()
 
 		for (const [desktopNav, mobileNav, heading] of pages) {
 			const nav = viewport.name === 'desktop' ? desktopNav : mobileNav
@@ -77,10 +80,16 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
 				await expect(page.getByLabel('公网 DoT 监听')).toBeHidden()
 				await expect(page.getByLabel('公网海外上游')).toBeVisible()
 			}
-			if (heading === '规则与导入') {
+			if (heading === '规则') {
 				await expect(page.getByText('当前已应用规则')).toBeVisible()
 				await expect(page.getByText('applied-openai')).toBeVisible()
-				await expect(page.getByText('domain_suffix:openai.com')).toBeVisible()
+				await expect(page.getByText('DNS 解析池 · pool:cn')).toBeVisible()
+				await expect(page.getByText('还有 1 项')).toBeVisible()
+			}
+			if (heading === '日志') {
+				await expect(page.getByText('最后刷新')).toBeVisible()
+				await page.getByTitle('刷新').click()
+				await expect(page.getByText('smartdns ready')).toBeVisible()
 			}
 			const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
 			expect(overflow, `${heading} has horizontal page overflow`).toBeLessThanOrEqual(1)
@@ -92,3 +101,13 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
     expect(consoleErrors).toEqual([])
   })
 }
+
+test('theme toggle switches between neutral themes', async ({ page }) => {
+  await mockAPI(page)
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: '运行概览' })).toBeVisible()
+  const before = await page.locator('html').getAttribute('data-theme')
+  await page.getByTitle(before === 'dark-neutral' ? '切换到浅色模式' : '切换到深色模式').click()
+  const after = await page.locator('html').getAttribute('data-theme')
+  expect([before, after].sort()).toEqual(['dark-neutral', 'light-neutral'])
+})
