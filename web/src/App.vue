@@ -6,7 +6,7 @@
     <AppNav :page="page" @select="page = $event" @logout="logout" />
     <main class="min-w-0 flex-1 overflow-y-auto pb-16 lg:pb-0">
       <header class="sticky top-0 z-20 flex min-h-16 flex-wrap items-center justify-between gap-2 border-b border-base-300 bg-base-100/95 px-4 py-2 backdrop-blur sm:px-6">
-        <div class="min-w-0"><div class="truncate font-medium">{{ pageTitle }}</div><div class="text-xs text-base-content/55">active {{ dashboard?.active_revision || '-' }} · draft {{ dashboard?.draft_revision || '-' }}</div></div>
+        <div class="min-w-0 truncate font-medium">{{ pageTitle }}</div>
         <div class="flex items-center gap-2"><button class="btn btn-ghost btn-square btn-sm" :title="themeTitle" @click="toggleTheme"><Moon v-if="theme === 'light-neutral'" class="size-4" /><Sun v-else class="size-4" /></button><button class="btn btn-ghost btn-sm" :disabled="busy || !draft" @click="save"><Save class="size-4" />保存</button><button class="btn btn-outline btn-sm" :disabled="busy" @click="validate"><ShieldCheck class="size-4" />预检</button><button class="btn btn-primary btn-sm" :disabled="busy" @click="apply"><Play class="size-4" />应用</button></div>
       </header>
       <div v-if="message" class="mx-4 mt-4 flex items-center gap-2 border px-3 py-2 text-sm sm:mx-6" :class="error ? 'border-error/40 bg-error/10 text-error' : 'border-success/40 bg-success/10 text-success'"><CircleAlert v-if="error" class="size-4 shrink-0" /><CircleCheck v-else class="size-4 shrink-0" /><span class="break-all">{{ message }}</span><button class="btn btn-ghost btn-square btn-xs ml-auto" title="关闭" @click="message = ''"><X class="size-4" /></button></div>

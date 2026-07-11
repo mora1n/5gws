@@ -75,9 +75,10 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	if cfg.IOS.BaseURL != "https://dot.example.com" {
 		t.Fatalf("ios.base_url = %q", cfg.IOS.BaseURL)
 	}
-	if len(cfg.DNS.UpstreamsCN) == 0 {
-		t.Fatal("expected default CN upstreams")
-	}
+	assertEqualStrings(t, cfg.DNS.UpstreamsCN, []string{
+		"180.76.76.76", "101.226.4.6", "218.30.118.6",
+		"114.114.114.114", "114.114.115.115", "117.50.10.10", "52.80.66.66",
+	})
 	assertEqualStrings(t, cfg.DNS.UpstreamsOverseasPrivate, []string{"22.22.22.22"})
 	assertEqualStrings(t, cfg.DNS.UpstreamsOverseasPublic, []string{
 		"https://cloudflare-dns.com/dns-query",
@@ -177,6 +178,18 @@ func TestApplyDefaultsMigratesLegacyIOSAddress(t *testing.T) {
 	if cfg.IOS.BaseURL != "https://profiles.example.net" {
 		t.Fatalf("custom ios.base_url changed to %q", cfg.IOS.BaseURL)
 	}
+}
+
+func TestApplyDefaultsMigratesOnlyLegacyCNUpstreams(t *testing.T) {
+	cfg := validConfig()
+	cfg.DNS.UpstreamsCN = []string{"180.76.76.76", "101.226.4.6", "218.30.118.6"}
+	cfg.ApplyDefaults()
+	assertEqualStrings(t, cfg.DNS.UpstreamsCN, defaultCNUpstreams())
+
+	custom := []string{"192.0.2.53", "198.51.100.53"}
+	cfg.DNS.UpstreamsCN = append([]string(nil), custom...)
+	cfg.ApplyDefaults()
+	assertEqualStrings(t, cfg.DNS.UpstreamsCN, custom)
 }
 
 func TestValidateRejectsInvalidQUICPolicy(t *testing.T) {

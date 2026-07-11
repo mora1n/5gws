@@ -74,7 +74,7 @@ func TestResolverFetchesImportsConcurrentlyInDeclaredOrder(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 220*time.Millisecond {
 		t.Fatalf("imports did not run concurrently: %s", elapsed)
 	}
-	if norm.Rules[0].Name != "slow-1" || norm.Rules[1].Name != "fast-1" {
+	if norm.Rules[0].Name != "slow" || norm.Rules[1].Name != "fast" {
 		t.Fatalf("import order changed: %q, %q", norm.Rules[0].Name, norm.Rules[1].Name)
 	}
 }

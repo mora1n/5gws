@@ -219,12 +219,8 @@ func (c *Config) ApplyDefaults() {
 	if c.DNS.CacheSize == 0 {
 		c.DNS.CacheSize = 32768
 	}
-	if len(c.DNS.UpstreamsCN) == 0 {
-		c.DNS.UpstreamsCN = []string{
-			"180.76.76.76",
-			"101.226.4.6",
-			"218.30.118.6",
-		}
+	if len(c.DNS.UpstreamsCN) == 0 || usesLegacyCNUpstreams(c.DNS.UpstreamsCN) {
+		c.DNS.UpstreamsCN = defaultCNUpstreams()
 	}
 	if len(c.DNS.UpstreamsOverseasPrivate) == 0 {
 		c.DNS.UpstreamsOverseasPrivate = []string{
@@ -256,6 +252,25 @@ func (c *Config) ApplyDefaults() {
 			exit.TimeoutSeconds = 300
 		}
 	}
+}
+
+func defaultCNUpstreams() []string {
+	return []string{
+		"180.76.76.76",
+		"101.226.4.6",
+		"218.30.118.6",
+		"114.114.114.114",
+		"114.114.115.115",
+		"117.50.10.10",
+		"52.80.66.66",
+	}
+}
+
+func usesLegacyCNUpstreams(values []string) bool {
+	return len(values) == 3 &&
+		values[0] == "180.76.76.76" &&
+		values[1] == "101.226.4.6" &&
+		values[2] == "218.30.118.6"
 }
 
 func (c Config) Validate() error {

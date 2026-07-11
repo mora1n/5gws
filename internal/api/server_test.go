@@ -124,6 +124,36 @@ func TestDraftOmitsResolvedRulesAndActiveRulesAreSummarized(t *testing.T) {
 	}
 }
 
+func TestActiveRuleSummaryNormalizesOnlyLegacySingleImports(t *testing.T) {
+	bundle := store.Bundle{
+		Rules: rules.File{Imports: []rules.Import{
+			{Name: "cn"},
+			{Name: "multiple"},
+		}},
+		ResolvedRules: []rules.Rule{
+			{Name: "cn-1", DNSPool: "cn", DomainSuffix: []string{"example.cn"}},
+			{Name: "multiple-1", Exit: "direct", DomainSuffix: []string{"one.example"}},
+			{Name: "multiple-2", Exit: "direct", DomainSuffix: []string{"two.example"}},
+		},
+	}
+	summary := summarizeActiveRules(bundle)
+	var names []string
+	for _, group := range summary.Groups {
+		for _, rule := range group.Rules {
+			names = append(names, rule.Name)
+		}
+	}
+	joined := strings.Join(names, ",")
+	for _, want := range []string{"cn", "multiple-1", "multiple-2"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("summary names = %q, missing %q", joined, want)
+		}
+	}
+	if strings.Contains(joined, "cn-1") {
+		t.Fatalf("legacy single import was not normalized: %q", joined)
+	}
+}
+
 func TestSPAAssetCacheHeaders(t *testing.T) {
 	server, closeState := testServer(t)
 	defer closeState()

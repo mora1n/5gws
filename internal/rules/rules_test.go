@@ -33,6 +33,9 @@ func TestNormalizeImportsSingBoxAndMihomo(t *testing.T) {
 	if norm.Rules[1].DNSPool != "cn" || norm.Rules[1].Exit != "" {
 		t.Fatalf("sing-box DNS pool import has wrong action: %#v", norm.Rules[1])
 	}
+	if norm.Rules[1].Name != "cn" {
+		t.Fatalf("single sing-box rule name = %q, want cn", norm.Rules[1].Name)
+	}
 	if norm.Rules[2].Domain[0] != "example.com" {
 		t.Fatalf("mihomo domain not imported: %#v", norm.Rules[2])
 	}
@@ -57,6 +60,23 @@ func TestNormalizeImportsSingBoxStringMatcher(t *testing.T) {
 	}
 	if got := norm.Rules[0].DomainSuffix; len(got) != 1 || got[0] != "example.com" {
 		t.Fatalf("domain_suffix = %#v, want [example.com]", got)
+	}
+	if norm.Rules[0].Name != "stun" {
+		t.Fatalf("single sing-box rule name = %q, want stun", norm.Rules[0].Name)
+	}
+}
+
+func TestNormalizeKeepsIndexesForMultipleSingBoxRules(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "multiple.json")
+	mustWrite(t, path, `{"version":3,"rules":[{"domain_suffix":["one.example"]},{"domain_suffix":["two.example"]}]}`)
+
+	norm, err := Normalize(File{Imports: []Import{{Name: "multiple", Type: "sing-box", Path: path, Exit: "direct"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(norm.Rules) != 2 || norm.Rules[0].Name != "multiple-1" || norm.Rules[1].Name != "multiple-2" {
+		t.Fatalf("multiple sing-box rule names = %#v", norm.Rules)
 	}
 }
 
@@ -103,11 +123,17 @@ func TestNormalizeSkipsUnsupportedSingBoxImportMatchers(t *testing.T) {
 	if got := norm.Rules[0].DomainSuffix; len(got) != 1 || got[0] != "ookla.com" {
 		t.Fatalf("domain_suffix = %#v, want [ookla.com]", got)
 	}
+	if norm.Rules[0].Name != "speedtest" {
+		t.Fatalf("filtered single rule name = %q, want speedtest", norm.Rules[0].Name)
+	}
 	joined := warningText(norm.Warnings)
-	for _, want := range []string{"domain_regex", "speedtest-1", "speedtest-2", "no supported matchers"} {
+	for _, want := range []string{"domain_regex", "rule speedtest matcher", "speedtest-2", "no supported matchers"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("warnings missing %q:\n%s", want, joined)
 		}
+	}
+	if strings.Contains(joined, "speedtest-1") {
+		t.Fatalf("warning kept old single rule name:\n%s", joined)
 	}
 }
 

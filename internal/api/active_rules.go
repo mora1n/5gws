@@ -2,9 +2,12 @@ package api
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/morain/5gws/internal/rules"
+	"github.com/morain/5gws/internal/store"
 )
 
 type activeRulesResponse struct {
@@ -41,7 +44,7 @@ func (s *Server) activeRules(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	response := summarizeActiveRules(revision.Bundle.ResolvedRules)
+	response := summarizeActiveRules(revision.Bundle)
 	response.RevisionID = revision.ID
 	response.ActiveAt = revision.ActiveAt
 	if response.ActiveAt.IsZero() {
@@ -50,9 +53,11 @@ func (s *Server) activeRules(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-func summarizeActiveRules(items []rules.Rule) activeRulesResponse {
+func summarizeActiveRules(bundle store.Bundle) activeRulesResponse {
+	items := bundle.ResolvedRules
 	response := activeRulesResponse{RuleCount: len(items)}
 	indices := make(map[string]int)
+	displayNames := legacySingleImportNames(bundle)
 	for _, rule := range items {
 		title, target := activeRuleTarget(rule)
 		key := title + ":" + target
@@ -68,12 +73,40 @@ func summarizeActiveRules(items []rules.Rule) activeRulesResponse {
 			count += matcher.Count
 		}
 		group := &response.Groups[index]
-		group.Rules = append(group.Rules, activeRuleSummary{Name: rule.Name, Target: target, Matchers: matchers})
+		name := rule.Name
+		if displayName, ok := displayNames[name]; ok {
+			name = displayName
+		}
+		group.Rules = append(group.Rules, activeRuleSummary{Name: name, Target: target, Matchers: matchers})
 		group.RuleCount++
 		group.MatcherCount += count
 		response.MatcherCount += count
 	}
 	return response
+}
+
+func legacySingleImportNames(bundle store.Bundle) map[string]string {
+	aliases := make(map[string]string)
+	for _, imp := range bundle.Rules.Imports {
+		var matched string
+		count := 0
+		prefix := imp.Name + "-"
+		for _, rule := range bundle.ResolvedRules {
+			if !strings.HasPrefix(rule.Name, prefix) {
+				continue
+			}
+			index, err := strconv.Atoi(strings.TrimPrefix(rule.Name, prefix))
+			if err != nil || index < 1 {
+				continue
+			}
+			matched = rule.Name
+			count++
+		}
+		if count == 1 {
+			aliases[matched] = imp.Name
+		}
+	}
+	return aliases
 }
 
 func activeRuleTarget(rule rules.Rule) (string, string) {

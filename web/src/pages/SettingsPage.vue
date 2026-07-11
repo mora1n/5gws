@@ -1,5 +1,4 @@
 <template><div class="panel-section"><h2 class="text-lg font-semibold">设置</h2></div>
-  <section class="panel-section"><h3 class="mb-4 font-semibold">面板</h3><div class="grid gap-4 md:grid-cols-2"><label><span class="field-label">监听地址</span><input v-model.trim="bundle.config.panel.listen" class="input w-full mono" /></label><ListField v-model="bundle.config.panel.allowed_cidrs" label="允许的管理 CIDR" /></div></section>
   <section class="panel-section"><h3 class="mb-4 font-semibold">iOS</h3><div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3"><label class="flex items-center gap-3"><input v-model="bundle.config.ios.enabled" type="checkbox" class="toggle toggle-primary" /><span>启用 profile</span></label><label><span class="field-label">公开地址</span><input v-model.trim="bundle.config.ios.base_url" class="input w-full" inputmode="url" /></label><label><span class="field-label">组织</span><input v-model.trim="bundle.config.ios.organization" class="input w-full" /></label></div>
     <div v-if="bundle.config.ios.enabled" class="mt-5 border-t border-base-300 pt-5">
       <div v-if="profile?.enabled && profile.profile_url && profile.profile_qr" class="grid items-center gap-5 sm:grid-cols-[11rem_minmax(0,1fr)]">
@@ -16,7 +15,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { Download, KeyRound, RefreshCw, Upload } from '@lucide/vue'
-import ListField from '@/components/ListField.vue'
 import { api } from '@/api'
 import type { Bundle, IOSProfile } from '@/types'
 const bundle = defineModel<Bundle>('bundle', { required: true })

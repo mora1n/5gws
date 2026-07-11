@@ -334,6 +334,15 @@ func parseSingBox(imp Import, data []byte) ([]Rule, []Warning, error) {
 		}
 		out = append(out, rule)
 	}
+	if len(out) == 1 {
+		oldName := out[0].Name
+		out[0].Name = imp.Name
+		for i := range warnings {
+			if warnings[i].Rule == oldName {
+				warnings[i].Rule = imp.Name
+			}
+		}
+	}
 	return out, warnings, nil
 }
 

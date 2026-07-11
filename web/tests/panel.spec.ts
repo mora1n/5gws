@@ -74,6 +74,8 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
     await mockAPI(page)
     await page.goto('/')
     await expect(page.getByRole('heading', { name: '运行概览' })).toBeVisible()
+		await expect(page.locator('header')).not.toContainText('active')
+		await expect(page.locator('header')).not.toContainText('draft')
     await expect(page.locator('html')).toHaveAttribute('data-theme', /neutral/)
     await expect(page.getByText('配置状态')).toBeHidden()
     await expect(page.getByText('有草稿')).toBeHidden()
@@ -103,6 +105,9 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
 				await expect(page.getByText('smartdns ready')).toBeVisible()
 			}
 			if (heading === '设置') {
+				await expect(page.getByRole('heading', { name: '面板', exact: true })).toBeHidden()
+				await expect(page.getByLabel('监听地址')).toBeHidden()
+				await expect(page.getByText('允许的管理 CIDR')).toBeHidden()
 				await expect(page.getByAltText('iOS Profile 二维码')).toBeVisible()
 				await expect(page.getByRole('link', { name: '下载 Profile' })).toHaveAttribute('href', 'https://dns.gateway.example.net/ios/5gws-dot.mobileconfig')
 			}
