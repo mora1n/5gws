@@ -20,51 +20,44 @@ import (
 
 func runInstall(args []string, input io.Reader, out io.Writer) error {
 	flags := flag.NewFlagSet("install", flag.ContinueOnError)
-	gateway := flags.String("gateway-ip", "10.0.0.1", "gateway IP returned by DNS rules")
-	cidr := flags.String("internal-cidr", "172.22.0.0/16", "carrier internal CIDR")
-	iface := flags.String("ingress-iface", defaultInterface(), "ingress interface")
-	domain := flags.String("dot-domain", "", "DoT and panel domain")
-	panel := flags.String("panel-listen", "0.0.0.0:8443", "panel HTTPS listen address")
-	adminCIDR := flags.String("admin-cidr", "", "additional panel management CIDR")
-	iosEnabled := flags.Bool("ios", true, "enable iOS profile")
-	yes := flags.Bool("assume-yes", false, "use flag/default values without prompting")
-	dryRun := flags.Bool("dry-run", false, "validate and show actions only")
+	opts := installOptions{}
+	flags.StringVar(&opts.gatewayIP, "gateway-ip", "", "gateway IPv4 returned for routed domains")
+	flags.StringVar(&opts.internalCIDR, "internal-cidr", "", "client source CIDR allowed through the gateway")
+	flags.StringVar(&opts.ingressIface, "ingress-iface", "", "network interface receiving client traffic")
+	flags.StringVar(&opts.dotDomain, "dot-domain", "", "domain pointing to this server for DNS over TLS")
+	flags.BoolVar(&opts.iosEnabled, "ios", false, "enable the optional iOS configuration profile")
+	flags.BoolVar(&opts.nonInteractive, "non-interactive", false, "require all installation values as flags")
+	flags.BoolVar(&opts.dryRun, "dry-run", false, "validate and show actions only")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	reader := bufio.NewReader(input)
-	if !*yes {
-		*gateway = prompt(reader, out, "gateway IP", *gateway)
-		*cidr = prompt(reader, out, "carrier internal CIDR", *cidr)
-		*iface = prompt(reader, out, "ingress interface", *iface)
-		*domain = prompt(reader, out, "DoT domain", *domain)
-		*adminCIDR = prompt(reader, out, "additional management CIDR", *adminCIDR)
+	if err := opts.collect(input, out); err != nil {
+		return err
 	}
-	if strings.TrimSpace(*domain) == "" {
-		return errors.New("--dot-domain is required")
-	}
-	cfg := installConfig(*gateway, *cidr, *iface, *domain, *panel, *adminCIDR, *iosEnabled)
+	cfg := installConfig(opts.gatewayIP, opts.internalCIDR, opts.ingressIface, opts.dotDomain, opts.iosEnabled)
 	if err := cfg.Validate(); err != nil {
 		return err
+	}
+	if !opts.dryRun {
+		if os.Geteuid() != 0 {
+			return errors.New("安装必须以 root 运行")
+		}
+		if err := refuseLegacyInstall(cfg.System.StateDir); err != nil {
+			return err
+		}
 	}
 	ruleFile := defaultRuleFile()
 	norm, err := (rules.Resolver{}).Normalize(context.Background(), ruleFile)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "gateway=%s internal=%s iface=%s panel=%s rules=%d\n", *gateway, *cidr, *iface, *panel, len(norm.Rules))
-	if err := installer.EnsureRuntime(cfg, *dryRun, out); err != nil {
+	printInstallSummary(out, cfg, len(norm.Rules))
+	if err := installer.EnsureRuntime(cfg, opts.dryRun, out); err != nil {
 		return err
 	}
-	if *dryRun {
-		fmt.Fprintln(out, "dry-run: would initialize SQLite, obtain the TLS certificate, and install 5gws.service")
+	if opts.dryRun {
+		fmt.Fprintln(out, "试运行：将申请 TLS 证书、初始化服务并启动 5gws.service")
 		return nil
-	}
-	if os.Geteuid() != 0 {
-		return errors.New("install must run as root")
-	}
-	if err := refuseLegacyInstall(cfg.System.StateDir); err != nil {
-		return err
 	}
 	if err := ensureCertificate(cfg, out); err != nil {
 		return err
@@ -72,10 +65,57 @@ func runInstall(args []string, input io.Reader, out io.Writer) error {
 	return initializeService(cfg, ruleFile, norm, out)
 }
 
-func installConfig(gateway, cidr, iface, domain, panel, adminCIDR string, iosEnabled bool) config.Config {
+type installOptions struct {
+	gatewayIP      string
+	internalCIDR   string
+	ingressIface   string
+	dotDomain      string
+	iosEnabled     bool
+	nonInteractive bool
+	dryRun         bool
+}
+
+func (o *installOptions) collect(input io.Reader, out io.Writer) error {
+	if o.nonInteractive {
+		missing := missingInstallFlags(*o)
+		if len(missing) > 0 {
+			return fmt.Errorf("非交互安装缺少参数：%s", strings.Join(missing, ", "))
+		}
+		return nil
+	}
+	reader := bufio.NewReader(input)
+	var err error
+	if o.gatewayIP, err = prompt(reader, out, "网关 IPv4", "命中分流规则时返回给客户端的服务器地址", valueOr(o.gatewayIP, "10.0.0.1"), false); err != nil {
+		return err
+	}
+	if o.internalCIDR, err = prompt(reader, out, "客户端网段", "允许使用此网关的客户端来源 CIDR", valueOr(o.internalCIDR, "172.22.0.0/16"), false); err != nil {
+		return err
+	}
+	if o.ingressIface, err = prompt(reader, out, "入口网卡", "接收客户端流量的服务器网络接口", valueOr(o.ingressIface, defaultInterface()), false); err != nil {
+		return err
+	}
+	o.dotDomain, err = prompt(reader, out, "DoT 域名", "已解析到本机，用于 DNS over TLS 和面板证书", o.dotDomain, true)
+	return err
+}
+
+func missingInstallFlags(opts installOptions) []string {
+	values := []struct{ flag, value string }{
+		{"--gateway-ip", opts.gatewayIP}, {"--internal-cidr", opts.internalCIDR},
+		{"--ingress-iface", opts.ingressIface}, {"--dot-domain", opts.dotDomain},
+	}
+	var missing []string
+	for _, item := range values {
+		if strings.TrimSpace(item.value) == "" {
+			missing = append(missing, item.flag)
+		}
+	}
+	return missing
+}
+
+func installConfig(gateway, cidr, iface, domain string, iosEnabled bool) config.Config {
 	access := true
 	cfg := config.Config{
-		Panel:   config.PanelConfig{Listen: panel},
+		Panel:   config.PanelConfig{Listen: "127.0.0.1:19443"},
 		Network: config.NetworkConfig{GatewayIP: gateway, InternalCIDR: cidr, IngressIface: iface},
 		DNS:     config.DNSConfig{DOTDomain: strings.ToLower(strings.TrimSuffix(domain, "."))},
 		Logging: config.LoggingConfig{Level: "info", Access: &access},
@@ -83,10 +123,25 @@ func installConfig(gateway, cidr, iface, domain, panel, adminCIDR string, iosEna
 		Exits:   []config.ExitConfig{{Name: "direct", Type: "direct"}},
 	}
 	cfg.ApplyDefaults()
-	if adminCIDR != "" {
-		cfg.Panel.AllowedCIDRs = append(cfg.Panel.AllowedCIDRs, adminCIDR)
-	}
 	return cfg
+}
+
+func printInstallSummary(out io.Writer, cfg config.Config, ruleCount int) {
+	fmt.Fprintln(out, "\n安装配置")
+	fmt.Fprintf(out, "  网关 IPv4:  %s\n", cfg.Network.GatewayIP)
+	fmt.Fprintf(out, "  客户端网段: %s\n", cfg.Network.InternalCIDR)
+	fmt.Fprintf(out, "  入口网卡:   %s\n", cfg.Network.IngressIface)
+	fmt.Fprintf(out, "  DoT 域名:   %s\n", cfg.DNS.DOTDomain)
+	fmt.Fprintf(out, "  Web 面板:   https://127.0.0.1:19443（仅供 Nginx 反代）\n")
+	fmt.Fprintf(out, "  iOS Profile: %s\n", enabledText(cfg.IOS.Enabled))
+	fmt.Fprintf(out, "  初始规则:   %d\n\n", ruleCount)
+}
+
+func enabledText(enabled bool) string {
+	if enabled {
+		return "启用"
+	}
+	return "关闭"
 }
 
 func defaultRuleFile() rules.File {
@@ -132,7 +187,10 @@ func initializeService(cfg config.Config, file rules.File, norm rules.Normalized
 	if err := command(out, "systemctl", "enable", "--now", "5gws.service"); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, "setup token: journalctl -u 5gws.service -n 30 --no-pager")
+	fmt.Fprintln(out, "\n安装完成")
+	fmt.Fprintln(out, "  服务状态: sudo 5gws status")
+	fmt.Fprintln(out, "  Setup token: sudo journalctl -u 5gws.service -n 30 --no-pager")
+	fmt.Fprintln(out, "  Nginx upstream: https://127.0.0.1:19443")
 	return nil
 }
 
@@ -219,10 +277,33 @@ func runUninstall(args []string, out io.Writer) error {
 	return result
 }
 
-func prompt(reader *bufio.Reader, out io.Writer, label, fallback string) string {
-	fmt.Fprintf(out, "%s [%s]: ", label, fallback)
-	value, _ := reader.ReadString('\n')
-	if value = strings.TrimSpace(value); value != "" {
+func prompt(reader *bufio.Reader, out io.Writer, label, help, fallback string, required bool) (string, error) {
+	for {
+		fmt.Fprintf(out, "\n%s\n  %s\n", label, help)
+		if fallback == "" {
+			fmt.Fprint(out, "> ")
+		} else {
+			fmt.Fprintf(out, "[%s] > ", fallback)
+		}
+		value, err := reader.ReadString('\n')
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value, nil
+		}
+		if fallback != "" {
+			return fallback, nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("%s为必填项且输入已结束", label)
+		}
+		if required {
+			fmt.Fprintf(out, "%s不能为空，请重新输入。\n", label)
+		}
+	}
+}
+
+func valueOr(value, fallback string) string {
+	if strings.TrimSpace(value) != "" {
 		return value
 	}
 	return fallback

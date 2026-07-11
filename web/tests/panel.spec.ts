@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test'
 const bundle = {
   config: {
     system: { config_dir: '/etc/5gws', state_dir: '/var/lib/5gws', run_dir: '/run/5gws', user: 'root' },
-    panel: { listen: '0.0.0.0:8443', allowed_cidrs: ['10.0.0.0/24', '2001:db8:1234:5678::/64'] },
+    panel: { listen: '127.0.0.1:19443', allowed_cidrs: ['127.0.0.0/8', '::1/128'] },
     network: { gateway_ip: '10.0.0.1', internal_cidr: '10.0.0.0/24', ingress_iface: 'wwan0', http_redirect_port: 18080, https_redirect_port: 18443, quic_redirect_port: 18443, tcp_redirect_port: 18082, haproxy_max_connections: 16384, quic_policy: 'reject', encrypted_dns_policy: 'reject' },
     routing: { fallback_exit: 'direct' },
     dns: { binary: '/usr/local/bin/smartdns', dot_domain: 'dns.gateway.example.net', listen_udp: '0.0.0.0:1053', listen_tcp: '0.0.0.0:1053', listen_dot: '0.0.0.0:1853', listen_public_dot: '0.0.0.0:853', backend_resolvers: ['1.1.1.1:53', '8.8.8.8:53'], cert_dir: '/var/lib/5gws/ios', cert_file: '/etc/5gws/fullchain.pem', key_file: '/etc/5gws/privkey.pem', cache_size: 32768, upstreams_cn: ['223.5.5.5', '119.29.29.29'], upstreams_overseas_private: ['1.1.1.1'], upstreams_overseas_public: ['8.8.8.8'] },

@@ -69,6 +69,9 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	if cfg.DNS.ListenUDP != "0.0.0.0:1053" {
 		t.Fatalf("listen_udp = %q", cfg.DNS.ListenUDP)
 	}
+	if cfg.Panel.Listen != "127.0.0.1:19443" {
+		t.Fatalf("panel.listen = %q", cfg.Panel.Listen)
+	}
 	if len(cfg.DNS.UpstreamsCN) == 0 {
 		t.Fatal("expected default CN upstreams")
 	}

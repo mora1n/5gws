@@ -138,7 +138,7 @@ func (c *Config) ApplyDefaults() {
 		c.System.User = "5gws"
 	}
 	if c.Panel.Listen == "" {
-		c.Panel.Listen = "0.0.0.0:8443"
+		c.Panel.Listen = "127.0.0.1:19443"
 	}
 	if len(c.Panel.AllowedCIDRs) == 0 && c.Network.InternalCIDR != "" {
 		c.Panel.AllowedCIDRs = []string{"127.0.0.0/8", "::1/128", c.Network.InternalCIDR}

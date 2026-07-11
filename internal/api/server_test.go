@@ -78,7 +78,7 @@ func testServer(t *testing.T) (*Server, func()) {
 		t.Fatal(err)
 	}
 	cfg := config.Config{
-		Panel:   config.PanelConfig{Listen: "127.0.0.1:8443", AllowedCIDRs: []string{"192.0.2.0/24"}},
+		Panel:   config.PanelConfig{Listen: "127.0.0.1:19443", AllowedCIDRs: []string{"192.0.2.0/24"}},
 		Network: config.NetworkConfig{GatewayIP: "10.0.0.1", InternalCIDR: "172.22.0.0/16", IngressIface: "eth0"},
 		DNS:     config.DNSConfig{DOTDomain: "dot.example.com"}, Logging: config.LoggingConfig{Level: "info"},
 		Exits: []config.ExitConfig{{Name: "direct", Type: "direct"}},

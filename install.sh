@@ -10,14 +10,16 @@ install_args=()
 
 usage() {
     cat <<'EOF'
-Usage: install.sh [--version VERSION] [--dry-run] [--skip-5gws-install]
+用法：install.sh [--version VERSION] [--dry-run] [--download-only] [-- INSTALL_OPTIONS...]
 
-Downloads the 5gws linux-amd64 release asset, installs the binary to
-/usr/local/bin/5gws, then runs "5gws install".
+下载并校验 5gws linux-amd64 release，将二进制安装到
+/usr/local/bin/5gws，然后启动中文配置向导。
 
-Examples:
+示例：
   wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash
-  wget -qO- https://raw.githubusercontent.com/mora1n/5gws/main/install.sh | sudo bash -s -- --version 0.2.0
+  sudo bash install.sh --version <version>
+  sudo bash install.sh -- --non-interactive --gateway-ip 203.0.113.10 \
+    --internal-cidr 172.22.0.0/16 --ingress-iface eth0 --dot-domain dns.example.com
 EOF
 }
 
@@ -41,20 +43,21 @@ while [[ $# -gt 0 ]]; do
             dry_run=1
             shift
             ;;
-        --skip-5gws-install)
+        --download-only)
             run_install=0
             shift
             ;;
-        --assume-yes)
-            install_args+=("$1")
+        --)
             shift
+            install_args=("$@")
+            break
             ;;
         -h|--help)
             usage
             exit 0
             ;;
         *)
-            die "unknown option: $1"
+            die "未知参数：$1；5gws install 参数需要放在 -- 之后"
             ;;
     esac
 done
@@ -163,14 +166,13 @@ release_tag="${resolved[0]}"
 asset_url="${resolved[1]}"
 checksum_url="${resolved[2]}"
 
-info "release: ${release_tag}"
-info "asset: ${asset_url}"
-info "install dir: ${install_dir}"
+info "版本：${release_tag}"
+info "安装位置：${install_dir}/5gws"
 
 if [[ "$dry_run" -eq 1 ]]; then
-    info "dry-run: would download and install 5gws"
+    info "试运行：将下载并校验 ${asset_url}"
     if [[ "$run_install" -eq 1 ]]; then
-        info "dry-run: would run ${install_dir}/5gws install ${install_args[*]}"
+        info "试运行：将执行 ${install_dir}/5gws install ${install_args[*]}"
     fi
     exit 0
 fi
@@ -185,15 +187,16 @@ download_file "$checksum_url" "$checksum"
 (cd "$tmp" && sha256sum -c "$(basename "$checksum")") || die "release checksum verification failed"
 
 install -m 755 "$binary" "${install_dir}/5gws"
-info "installed ${install_dir}/5gws"
+info "二进制已安装：${install_dir}/5gws"
 
 if [[ "$run_install" -eq 0 ]]; then
     exit 0
 fi
 
 if [[ -r /dev/tty ]]; then
-    info "running ${install_dir}/5gws install ${install_args[*]}"
+    info "启动 5gws 配置向导"
     "${install_dir}/5gws" install "${install_args[@]}" < /dev/tty
 else
-    die "no controlling TTY for guided install; run ${install_dir}/5gws install manually, or use ssh -t for one-line install"
+    info "未检测到终端，使用给定参数运行安装"
+    "${install_dir}/5gws" install "${install_args[@]}"
 fi
