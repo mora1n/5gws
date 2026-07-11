@@ -25,6 +25,7 @@ func TestConfigRendersAddressRules(t *testing.T) {
 		"bind-tls 0.0.0.0:853 -group overseas_public -no-rule-addr",
 		"bind-cert-file /etc/5gws/certs/fullchain.pem",
 		"bind-cert-key-file /etc/5gws/certs/privkey.pem",
+		"cache-file /var/log/smartdns/smartdns.cache",
 		"response-mode fastest-response",
 		"force-AAAA-SOA yes",
 		"force-qtype-SOA 64 65",
@@ -65,6 +66,9 @@ func TestConfigRendersAddressRules(t *testing.T) {
 	}
 	if strings.Contains(out, "address /example.cn/") {
 		t.Fatalf("DNS pool rule must not render address rewrite:\n%s", out)
+	}
+	if strings.Contains(out, "/var/lib/5gws/smartdns.cache") {
+		t.Fatalf("smartdns cache file must be writable by smartdns runtime user:\n%s", out)
 	}
 }
 

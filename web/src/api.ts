@@ -21,7 +21,6 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
 
 export const api = {
   bootstrap: () => request<{ needs_setup: boolean }>('/api/v1/bootstrap'),
-  claim: (body: object) => request('/api/v1/bootstrap', { method: 'POST', body: JSON.stringify(body) }),
   login: (body: object) => request('/api/v1/session', { method: 'POST', body: JSON.stringify(body) }),
   logout: () => request('/api/v1/session', { method: 'DELETE' }),
   me: () => request<{ username: string }>('/api/v1/me'),

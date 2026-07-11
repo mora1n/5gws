@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/subtle"
 	"net"
 	"net/http"
 	"time"
@@ -20,23 +19,6 @@ func (s *Server) bootstrapStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"needs_setup": needed})
-}
-
-func (s *Server) bootstrap(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Token, Username, Password string }
-	if !decodeJSON(w, r, &body) {
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(body.Token), []byte(s.SetupToken)) != 1 {
-		writeStatusError(w, http.StatusUnauthorized, "invalid setup token")
-		return
-	}
-	user, err := s.Auth.Bootstrap(r.Context(), body.Username, body.Password)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusCreated, user)
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {

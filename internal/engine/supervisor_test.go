@@ -37,6 +37,12 @@ func TestManagedCommandsUseSingleHAProxyProcess(t *testing.T) {
 	}
 }
 
+func TestReadinessTimeoutCoversSlowSmartDNSStartup(t *testing.T) {
+	if readinessTimeout < 15*time.Second {
+		t.Fatalf("readiness timeout = %s, want at least 15s", readinessTimeout)
+	}
+}
+
 func TestWatchIgnoresPlannedStop(t *testing.T) {
 	group := testProcessGroup()
 	supervisor := NewSupervisor(t.TempDir(), NewLogBuffer(1024))

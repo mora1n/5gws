@@ -39,10 +39,7 @@ func (m *Manager) NeedsBootstrap(ctx context.Context) (bool, error) {
 	return count == 0, err
 }
 
-func (m *Manager) Bootstrap(ctx context.Context, username, password string) (User, error) {
-	if len(username) < 3 || len(username) > 64 {
-		return User{}, errors.New("username must contain 3 to 64 characters")
-	}
+func (m *Manager) ResetAdmin(ctx context.Context, password string) (User, error) {
 	if len(password) < 12 {
 		return User{}, errors.New("password must contain at least 12 characters")
 	}
@@ -55,22 +52,27 @@ func (m *Manager) Bootstrap(ctx context.Context, username, password string) (Use
 		return User{}, err
 	}
 	defer tx.Rollback()
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM panel_users`).Scan(&count); err != nil {
+	var user User
+	err = tx.QueryRowContext(ctx, `SELECT id, username FROM panel_users WHERE username = ?`, "admin").Scan(&user.ID, &user.Username)
+	if errors.Is(err, sql.ErrNoRows) {
+		result, err := tx.ExecContext(ctx, `INSERT INTO panel_users(username, password_hash) VALUES(?, ?)`, "admin", hash)
+		if err != nil {
+			return User{}, err
+		}
+		id, err := result.LastInsertId()
+		if err != nil {
+			return User{}, err
+		}
+		user = User{ID: id, Username: "admin"}
+	} else if err != nil {
+		return User{}, err
+	} else if _, err := tx.ExecContext(ctx, `UPDATE panel_users SET password_hash = ? WHERE id = ?`, hash, user.ID); err != nil {
 		return User{}, err
 	}
-	if count != 0 {
-		return User{}, errors.New("bootstrap has already been claimed")
-	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO panel_users(username, password_hash) VALUES(?, ?)`, username, hash)
-	if err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE panel_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL`, user.ID); err != nil {
 		return User{}, err
 	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return User{}, err
-	}
-	return User{ID: id, Username: username}, tx.Commit()
+	return user, tx.Commit()
 }
 
 func (m *Manager) Login(ctx context.Context, username, password string) (User, string, time.Time, error) {
@@ -164,4 +166,12 @@ func newToken() (string, string, error) {
 func hashToken(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func GeneratePassword() (string, error) {
+	raw := make([]byte, 18)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("admin password: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }

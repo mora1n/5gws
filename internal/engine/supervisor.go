@@ -44,6 +44,8 @@ type ProcessStatus struct {
 	PID  int    `json:"pid"`
 }
 
+const readinessTimeout = 15 * time.Second
+
 func (s *Supervisor) Status() []ProcessStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -214,7 +216,7 @@ func (s *Supervisor) startGroup(parent context.Context, root string, bundle stor
 		return nil, err
 	default:
 		for _, address := range readinessAddresses(bundle) {
-			if err := waitTCP(ctx, address, 3*time.Second); err != nil {
+			if err := waitTCP(ctx, address, readinessTimeout); err != nil {
 				stopGroup(group)
 				return nil, err
 			}

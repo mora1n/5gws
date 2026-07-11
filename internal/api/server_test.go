@@ -30,12 +30,8 @@ func TestBootstrapLoginAndProtectedDraft(t *testing.T) {
 	defer closeState()
 	router := server.Router(false)
 
-	claim := request(t, http.MethodPost, "/api/v1/bootstrap", map[string]string{
-		"token": "setup", "username": "admin", "password": "correct-horse-battery",
-	})
-	claim.RemoteAddr = "192.0.2.10:4000"
-	if response := serve(router, claim); response.Code != http.StatusCreated {
-		t.Fatalf("bootstrap: %d %s", response.Code, response.Body.String())
+	if _, err := server.Auth.ResetAdmin(context.Background(), "correct-horse-battery"); err != nil {
+		t.Fatal(err)
 	}
 	login := request(t, http.MethodPost, "/api/v1/session", map[string]string{"username": "admin", "password": "correct-horse-battery"})
 	login.RemoteAddr = "192.0.2.10:4001"
@@ -91,7 +87,7 @@ func testServer(t *testing.T) (*Server, func()) {
 	}
 	logs := engine.NewLogBuffer(1024)
 	supervisor := engine.NewSupervisor(t.TempDir(), logs)
-	return &Server{Service: service.New(state, apiRuntime{}), Auth: auth.New(state.DB(), time.Hour), Supervisor: supervisor, SetupToken: "setup", Version: "test"}, func() { state.Close() }
+	return &Server{Service: service.New(state, apiRuntime{}), Auth: auth.New(state.DB(), time.Hour), Supervisor: supervisor, Version: "test"}, func() { state.Close() }
 }
 
 func request(t *testing.T, method, path string, body any) *http.Request {

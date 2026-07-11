@@ -10,6 +10,8 @@ import (
 	"github.com/morain/5gws/internal/rules"
 )
 
+const cacheFile = "/var/log/smartdns/smartdns.cache"
+
 type Output struct {
 	Config string
 	Files  map[string]string
@@ -41,7 +43,7 @@ func GenerateAt(cfg config.Config, norm rules.Normalized, configDir string) (Out
 	fmt.Fprintf(&b, "bind-cert-key-file %s\n", cfg.DNS.KeyFile)
 	fmt.Fprintf(&b, "cache-size %d\n", cfg.DNS.CacheSize)
 	b.WriteString("cache-persist yes\n")
-	fmt.Fprintf(&b, "cache-file %s/smartdns.cache\n", cfg.System.StateDir)
+	fmt.Fprintf(&b, "cache-file %s\n", cacheFile)
 	b.WriteString("prefetch-domain yes\n")
 	b.WriteString("response-mode fastest-response\n")
 	b.WriteString("force-AAAA-SOA yes\n")

@@ -9,9 +9,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
+	"github.com/morain/5gws/internal/auth"
 	"github.com/morain/5gws/internal/config"
 	"github.com/morain/5gws/internal/installer"
 	"github.com/morain/5gws/internal/rules"
@@ -25,6 +29,7 @@ func runInstall(args []string, input io.Reader, out io.Writer) error {
 	flags.StringVar(&opts.internalCIDR, "internal-cidr", "", "client source CIDR allowed through the gateway")
 	flags.StringVar(&opts.ingressIface, "ingress-iface", "", "network interface receiving client traffic")
 	flags.StringVar(&opts.dotDomain, "dot-domain", "", "domain pointing to this server for DNS over TLS")
+	flags.StringVar(&opts.panelListen, "panel-listen", "", "local HTTP address for the web panel reverse proxy")
 	flags.BoolVar(&opts.iosEnabled, "ios", false, "enable the optional iOS configuration profile")
 	flags.BoolVar(&opts.nonInteractive, "non-interactive", false, "require all installation values as flags")
 	flags.BoolVar(&opts.dryRun, "dry-run", false, "validate and show actions only")
@@ -34,7 +39,7 @@ func runInstall(args []string, input io.Reader, out io.Writer) error {
 	if err := opts.collect(input, out); err != nil {
 		return err
 	}
-	cfg := installConfig(opts.gatewayIP, opts.internalCIDR, opts.ingressIface, opts.dotDomain, opts.iosEnabled)
+	cfg := installConfig(opts.gatewayIP, opts.internalCIDR, opts.ingressIface, opts.dotDomain, opts.panelListen, opts.iosEnabled)
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -55,6 +60,9 @@ func runInstall(args []string, input io.Reader, out io.Writer) error {
 	if err := installer.EnsureRuntime(cfg, opts.dryRun, out); err != nil {
 		return err
 	}
+	if err := ensureSmartDNSLogDir(opts.dryRun, out); err != nil {
+		return err
+	}
 	if opts.dryRun {
 		fmt.Fprintln(out, "试运行：将申请 TLS 证书、初始化服务并启动 5gws.service")
 		return nil
@@ -70,6 +78,7 @@ type installOptions struct {
 	internalCIDR   string
 	ingressIface   string
 	dotDomain      string
+	panelListen    string
 	iosEnabled     bool
 	nonInteractive bool
 	dryRun         bool
@@ -112,10 +121,10 @@ func missingInstallFlags(opts installOptions) []string {
 	return missing
 }
 
-func installConfig(gateway, cidr, iface, domain string, iosEnabled bool) config.Config {
+func installConfig(gateway, cidr, iface, domain, panelListen string, iosEnabled bool) config.Config {
 	access := true
 	cfg := config.Config{
-		Panel:   config.PanelConfig{Listen: "127.0.0.1:19443"},
+		Panel:   config.PanelConfig{Listen: valueOr(panelListen, "127.0.0.1:19443")},
 		Network: config.NetworkConfig{GatewayIP: gateway, InternalCIDR: cidr, IngressIface: iface},
 		DNS:     config.DNSConfig{DOTDomain: strings.ToLower(strings.TrimSuffix(domain, "."))},
 		Logging: config.LoggingConfig{Level: "info", Access: &access},
@@ -132,7 +141,7 @@ func printInstallSummary(out io.Writer, cfg config.Config, ruleCount int) {
 	fmt.Fprintf(out, "  客户端网段: %s\n", cfg.Network.InternalCIDR)
 	fmt.Fprintf(out, "  入口网卡:   %s\n", cfg.Network.IngressIface)
 	fmt.Fprintf(out, "  DoT 域名:   %s\n", cfg.DNS.DOTDomain)
-	fmt.Fprintf(out, "  Web 面板:   https://127.0.0.1:19443（仅供 Nginx 反代）\n")
+	fmt.Fprintf(out, "  Web 面板:   http://%s（仅供 Nginx 反代）\n", cfg.Panel.Listen)
 	fmt.Fprintf(out, "  iOS Profile: %s\n", enabledText(cfg.IOS.Enabled))
 	fmt.Fprintf(out, "  初始规则:   %d\n\n", ruleCount)
 }
@@ -178,6 +187,14 @@ func initializeService(cfg config.Config, file rules.File, norm rules.Normalized
 	if _, err := state.Initialize(context.Background(), store.Bundle{Config: cfg, Rules: file, ResolvedRules: norm.Rules}); err != nil {
 		return err
 	}
+	password, err := auth.GeneratePassword()
+	if err != nil {
+		return err
+	}
+	admin, err := auth.New(state.DB(), 24*time.Hour).ResetAdmin(context.Background(), password)
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile("/etc/systemd/system/5gws.service", []byte(systemdUnit), 0o644); err != nil {
 		return err
 	}
@@ -189,9 +206,15 @@ func initializeService(cfg config.Config, file rules.File, norm rules.Normalized
 	}
 	fmt.Fprintln(out, "\n安装完成")
 	fmt.Fprintln(out, "  服务状态: sudo 5gws status")
-	fmt.Fprintln(out, "  Setup token: sudo journalctl -u 5gws.service -n 30 --no-pager")
-	fmt.Fprintln(out, "  Nginx upstream: https://127.0.0.1:19443")
+	printAdminCredentials(out, admin.Username, password)
+	fmt.Fprintf(out, "  Nginx upstream: http://%s\n", cfg.Panel.Listen)
 	return nil
+}
+
+func printAdminCredentials(out io.Writer, username, password string) {
+	fmt.Fprintln(out, "  管理员账号（仅显示一次）")
+	fmt.Fprintf(out, "    Username: %s\n", username)
+	fmt.Fprintf(out, "    Password: %s\n", password)
 }
 
 const systemdUnit = `[Unit]
@@ -216,7 +239,7 @@ WantedBy=multi-user.target
 func ensureCertificate(cfg config.Config, out io.Writer) error {
 	if _, err := os.Stat(cfg.DNS.CertFile); err == nil {
 		if _, err := os.Stat(cfg.DNS.KeyFile); err == nil {
-			return nil
+			return allowSmartDNSCertificateRead(cfg)
 		}
 	}
 	if _, err := exec.LookPath("certbot"); err != nil {
@@ -237,7 +260,83 @@ func ensureCertificate(cfg config.Config, out io.Writer) error {
 	if err := copy(filepath.Join(live, "fullchain.pem"), cfg.DNS.CertFile, 0o644); err != nil {
 		return err
 	}
-	return copy(filepath.Join(live, "privkey.pem"), cfg.DNS.KeyFile, 0o600)
+	if err := copy(filepath.Join(live, "privkey.pem"), cfg.DNS.KeyFile, 0o600); err != nil {
+		return err
+	}
+	return allowSmartDNSCertificateRead(cfg)
+}
+
+func allowSmartDNSCertificateRead(cfg config.Config) error {
+	group, err := smartDNSGroup()
+	if err != nil {
+		return err
+	}
+	for _, dir := range []string{cfg.System.ConfigDir, filepath.Dir(cfg.DNS.CertFile)} {
+		if err := os.Chown(dir, 0, group); err != nil {
+			return err
+		}
+		if err := os.Chmod(dir, 0o750); err != nil {
+			return err
+		}
+	}
+	for _, file := range []string{cfg.DNS.CertFile, cfg.DNS.KeyFile} {
+		if err := os.Chown(file, 0, group); err != nil {
+			return err
+		}
+		if err := os.Chmod(file, 0o640); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureSmartDNSLogDir(dryRun bool, out io.Writer) error {
+	if dryRun {
+		fmt.Fprintln(out, "dry-run: would prepare /var/log/smartdns for smartdns logs")
+		return nil
+	}
+	uid, err := smartDNSUser()
+	if err != nil {
+		return err
+	}
+	gid, err := smartDNSGroup()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll("/var/log/smartdns", 0o750); err != nil {
+		return err
+	}
+	if err := os.Chown("/var/log/smartdns", uid, gid); err != nil {
+		return err
+	}
+	return os.Chmod("/var/log/smartdns", 0o750)
+}
+
+func smartDNSUser() (int, error) {
+	account, err := user.Lookup("nobody")
+	if err != nil {
+		return 0, err
+	}
+	uid, err := strconv.Atoi(account.Uid)
+	if err != nil {
+		return 0, err
+	}
+	return uid, nil
+}
+
+func smartDNSGroup() (int, error) {
+	for _, name := range []string{"nogroup", "nobody"} {
+		group, err := user.LookupGroup(name)
+		if err != nil {
+			continue
+		}
+		gid, err := strconv.Atoi(group.Gid)
+		if err != nil {
+			return 0, err
+		}
+		return gid, nil
+	}
+	return 0, errors.New("smartdns certificate group not found: expected nogroup or nobody")
 }
 
 func runUninstall(args []string, out io.Writer) error {

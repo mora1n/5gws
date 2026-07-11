@@ -13,13 +13,24 @@ func TestHelpAndUnknownCommand(t *testing.T) {
 	if err := Run(nil, strings.NewReader(""), &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"install", "status", "rollback", "export"} {
+	for _, want := range []string{"install", "reset-admin", "status", "rollback", "export"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("help missing %q", want)
 		}
 	}
 	if err := Run([]string{"bot"}, strings.NewReader(""), &out, &out); err == nil {
 		t.Fatal("removed bot command was accepted")
+	}
+}
+
+func TestPrintAdminCredentialsShowsUsernameAndPassword(t *testing.T) {
+	var out bytes.Buffer
+	printAdminCredentials(&out, "admin", "secret-password")
+
+	for _, want := range []string{"管理员账号", "Username: admin", "Password: secret-password"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("admin credentials output missing %q:\n%s", want, out.String())
+		}
 	}
 }
 
@@ -45,7 +56,7 @@ func TestInstallUsesOneServiceUnit(t *testing.T) {
 }
 
 func TestInstallConfigUsesLocalPanelAndDisablesIOSByDefault(t *testing.T) {
-	cfg := installConfig("203.0.113.10", "172.22.0.0/16", "eth0", "DNS.Example.COM.", false)
+	cfg := installConfig("203.0.113.10", "172.22.0.0/16", "eth0", "DNS.Example.COM.", "", false)
 
 	if cfg.Panel.Listen != "127.0.0.1:19443" {
 		t.Fatalf("panel listen = %q", cfg.Panel.Listen)
@@ -59,9 +70,16 @@ func TestInstallConfigUsesLocalPanelAndDisablesIOSByDefault(t *testing.T) {
 }
 
 func TestInstallConfigCanEnableIOS(t *testing.T) {
-	cfg := installConfig("203.0.113.10", "172.22.0.0/16", "eth0", "dns.example.com", true)
+	cfg := installConfig("203.0.113.10", "172.22.0.0/16", "eth0", "dns.example.com", "", true)
 	if !cfg.IOS.Enabled {
 		t.Fatal("iOS profile should be enabled when requested")
+	}
+}
+
+func TestInstallConfigCanOverridePanelListen(t *testing.T) {
+	cfg := installConfig("203.0.113.10", "172.22.0.0/16", "eth0", "dns.example.com", "127.0.0.1:18000", false)
+	if cfg.Panel.Listen != "127.0.0.1:18000" {
+		t.Fatalf("panel listen = %q", cfg.Panel.Listen)
 	}
 }
 
@@ -148,13 +166,23 @@ func TestNonInteractiveInstallOptionsRequiresEveryValue(t *testing.T) {
 }
 
 func TestPrintInstallSummaryShowsLocalPanelAndIOSState(t *testing.T) {
-	cfg := installConfig("203.0.113.10", "172.22.0.0/16", "eth0", "dns.example.com", false)
+	cfg := installConfig("203.0.113.10", "172.22.0.0/16", "eth0", "dns.example.com", "", false)
 	var out bytes.Buffer
 	printInstallSummary(&out, cfg, 3)
 
-	for _, want := range []string{"127.0.0.1:19443", "iOS Profile: 关闭", "初始规则:   3"} {
+	for _, want := range []string{"http://127.0.0.1:19443", "iOS Profile: 关闭", "初始规则:   3"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("summary missing %q:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestEnsureSmartDNSLogDirDryRunExplainsAction(t *testing.T) {
+	var out bytes.Buffer
+	if err := ensureSmartDNSLogDir(true, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "/var/log/smartdns") {
+		t.Fatalf("dry-run output missing log dir:\n%s", out.String())
 	}
 }

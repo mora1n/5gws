@@ -20,7 +20,6 @@ type Server struct {
 	Service    *service.Service
 	Auth       *auth.Manager
 	Supervisor *engine.Supervisor
-	SetupToken string
 	Web        fs.FS
 	Version    string
 	Updater    *updater.Client
@@ -36,7 +35,6 @@ func (s *Server) Router(local bool) http.Handler {
 	}
 	router.Get("/api/v1/health", s.health)
 	router.Get("/api/v1/bootstrap", s.bootstrapStatus)
-	router.Post("/api/v1/bootstrap", s.bootstrap)
 	router.Post("/api/v1/session", s.login)
 	router.Group(func(router chi.Router) {
 		if local {

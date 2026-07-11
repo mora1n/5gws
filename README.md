@@ -46,18 +46,19 @@ sudo bash install.sh -- \
   --gateway-ip 203.0.113.10 \
   --internal-cidr 172.22.0.0/16 \
   --ingress-iface eth0 \
-  --dot-domain dns.example.com
+  --dot-domain dns.example.com \
+  --panel-listen 127.0.0.1:19443
 ```
 
 iOS 配置描述文件默认关闭，需要时在安装参数中添加 `--ios`。
 
 ## Nginx 反代
 
-Web 面板仅监听 `https://127.0.0.1:19443`。将示例中的 `dns.example.com` 替换为安装时填写的 DoT 域名：
+Web 面板默认仅监听 `http://127.0.0.1:19443`。
 
 ```nginx
 location / {
-    proxy_pass https://127.0.0.1:19443;
+    proxy_pass http://127.0.0.1:19443;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
@@ -65,18 +66,22 @@ location / {
     proxy_set_header X-Forwarded-Proto https;
     proxy_buffering off;
     proxy_read_timeout 1h;
-
-    proxy_ssl_server_name on;
-    proxy_ssl_name dns.example.com;
 }
 ```
 
 ## 首次登录
 
-安装完成后，从服务日志中获取一次性 setup token：
+首次安装完成会在当前 terminal 显示管理员账号：
+
+```text
+Username: admin
+Password: <随机密码>
+```
+
+如果已有实例还没有管理员，或需要重置管理员密码，在服务器终端运行：
 
 ```sh
-sudo journalctl -u 5gws.service -n 30 --no-pager
+sudo 5gws reset-admin
 ```
 
 ## 常用命令

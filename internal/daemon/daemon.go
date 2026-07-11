@@ -2,8 +2,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -60,17 +58,10 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	defer supervisor.Stop()
 	go collectMetrics(ctx, state, supervisor)
 
-	setupToken, err := setupToken(state, ctx)
-	if err != nil {
-		return err
-	}
-	if setupToken != "" {
-		log.Printf("5gws setup token: %s", setupToken)
-	}
 	application := service.New(state, supervisor)
 	server := &api.Server{
 		Service: application, Auth: auth.New(state.DB(), 24*time.Hour), Supervisor: supervisor,
-		SetupToken: setupToken, Web: webassets.FS(), Version: opts.Version,
+		Web: webassets.FS(), Version: opts.Version,
 		Updater: updater.New(),
 	}
 	public := &http.Server{
@@ -79,9 +70,8 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	}
 	publicErr := make(chan error, 1)
 	go func() {
-		cert, key := active.Bundle.Config.DNS.CertFile, active.Bundle.Config.DNS.KeyFile
-		log.Printf("panel listening on https://%s", public.Addr)
-		publicErr <- public.ListenAndServeTLS(cert, key)
+		log.Printf("panel listening on http://%s", public.Addr)
+		publicErr <- public.ListenAndServe()
 	}()
 
 	unixServer := &http.Server{Handler: server.Router(true), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second}
@@ -153,18 +143,6 @@ func collectMetrics(ctx context.Context, state *store.Store, supervisor *engine.
 		case <-ticker.C:
 		}
 	}
-}
-
-func setupToken(state *store.Store, ctx context.Context) (string, error) {
-	needed, err := auth.New(state.DB(), 24*time.Hour).NeedsBootstrap(ctx)
-	if err != nil || !needed {
-		return "", err
-	}
-	raw := make([]byte, 24)
-	if _, err := rand.Read(raw); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 func listenControl(runDir string) (net.Listener, error) {
