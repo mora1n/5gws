@@ -46,6 +46,18 @@ async function mockAPI(page: Page) {
     if (path === '/api/v1/bootstrap') return json({ needs_setup: false })
     if (path === '/api/v1/me') return json({ username: 'admin' })
     if (path === '/api/v1/dashboard') return json({ version: '0.2.0', active_revision: 7, draft_revision: 8, dirty: true, rules: 10023, processes: [{ name: 'smartdns', pid: 101 }, { name: 'haproxy', pid: 102 }, { name: 'sslocal', pid: 103 }, { name: 'gateway', pid: 100 }] })
+    if (path === '/api/v1/metrics') return json({ metrics: [
+      { timestamp: 1720699200, process_count: 4, rss_bytes: 52428800, tcp_connections: 31, rx_bytes: 1000000, tx_bytes: 2000000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 3.2 },
+      { timestamp: 1720699210, process_count: 4, rss_bytes: 53428800, tcp_connections: 35, rx_bytes: 1100000, tx_bytes: 2200000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 4.1 },
+    ] })
+    if (path === '/api/v1/diagnostics/run') return json({ checked_at: '2026-07-12T12:00:00Z', dns: [
+      { pool: 'cn', upstream: '223.5.5.5', protocol: 'udp', status: 'ok', latency_ms: 12.5, answers: ['1.2.3.4'] },
+      { pool: 'overseas_private', upstream: '1.1.1.1', protocol: 'udp', status: 'ok', latency_ms: 8.2, answers: ['104.16.1.1'] },
+      { pool: 'overseas_public', upstream: '8.8.8.8', protocol: 'udp', status: 'error', latency_ms: 2000, error: 'timeout' },
+    ], exits: [
+      { name: 'direct', type: 'direct', status: 'ok', egress_status: 'ok', egress_ip: '203.0.113.10', egress_latency_ms: 35.2 },
+      { name: 'tokyo-shadowsocks-production-long-name', type: 'shadowsocks-rust', status: 'ok', upstream: 'edge.gateway.example.net:8388', upstream_status: 'ok', upstream_latency_ms: 21.1, egress_status: 'ok', egress_ip: '198.51.100.20', egress_latency_ms: 88.4 },
+    ], dot: { domain: 'dns.gateway.example.net', listen: '0.0.0.0:853', status: 'ok', latency_ms: 11.2, certificate_status: 'ok', expires_at: '2026-09-10T00:00:00Z', days_remaining: 60, domain_match: true } })
     if (path === '/api/v1/active') return json(activeRevision)
     if (path === '/api/v1/active/rules') return json({
       revision_id: 7,
@@ -74,6 +86,9 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
     await mockAPI(page)
     await page.goto('/')
     await expect(page.getByRole('heading', { name: '运行概览' })).toBeVisible()
+		await expect(page.getByRole('heading', { name: '运行健康' })).toBeVisible()
+		await expect(page.getByRole('button', { name: '保存' })).toBeHidden()
+		await page.screenshot({ path: `/tmp/5gws-panel-${viewport.name}-overview.png`, fullPage: true })
 		await expect(page.locator('header')).not.toContainText('active')
 		await expect(page.locator('header')).not.toContainText('draft')
     await expect(page.locator('html')).toHaveAttribute('data-theme', /neutral/)
@@ -87,12 +102,17 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
 			if (nav !== '概览') await button.click()
 			await expect(page.getByRole('heading', { name: heading, exact: true }).first()).toBeVisible()
 			if (heading === 'DNS 与网络') {
+				await expect(page.getByRole('button', { name: '保存' })).toBeVisible()
 				await expect(page.getByLabel('HAProxy 最大连接数')).toBeHidden()
 				await expect(page.getByLabel('缓存条目')).toBeHidden()
 				await expect(page.getByLabel('后端解析器')).toBeHidden()
 				await expect(page.getByLabel('公网 DoT 监听')).toBeHidden()
 				await expect(page.getByLabel('公网海外上游')).toBeVisible()
+				await expect(page.getByRole('heading', { name: '已应用 DNS 状态' })).toBeVisible()
+				if (viewport.name === 'mobile') await page.getByRole('heading', { name: '已应用 DNS 状态' }).scrollIntoViewIfNeeded()
+				await page.screenshot({ path: `/tmp/5gws-panel-${viewport.name}-dns.png`, fullPage: true })
 			}
+			if (heading === '出口') await page.screenshot({ path: `/tmp/5gws-panel-${viewport.name}-exits.png`, fullPage: true })
 			if (heading === '规则') {
 				await expect(page.getByText('当前已应用规则')).toBeVisible()
 				await expect(page.getByText('applied-openai')).toBeVisible()
@@ -100,6 +120,7 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
 				await expect(page.getByText('还有 1 项')).toBeVisible()
 			}
 			if (heading === '日志') {
+				await expect(page.getByRole('button', { name: '保存' })).toBeHidden()
 				await expect(page.getByText('最后刷新')).toBeVisible()
 				await page.getByTitle('刷新').click()
 				await expect(page.getByText('smartdns ready')).toBeVisible()

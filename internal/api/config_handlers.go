@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/pelletier/go-toml/v2"
 
+	"github.com/morain/5gws/internal/engine"
 	"github.com/morain/5gws/internal/ios"
 	"github.com/morain/5gws/internal/store"
 )
@@ -31,7 +33,20 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	items, err := s.Service.Store().Metrics(r.Context(), 360)
-	respond(w, map[string]any{"metrics": items}, err)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	metrics := make([]engine.Metrics, 0, len(items))
+	for index := len(items) - 1; index >= 0; index-- {
+		var metric engine.Metrics
+		if err := json.Unmarshal(items[index], &metric); err != nil {
+			writeError(w, err)
+			return
+		}
+		metrics = append(metrics, metric)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"metrics": metrics})
 }
 
 func (s *Server) active(w http.ResponseWriter, r *http.Request) {

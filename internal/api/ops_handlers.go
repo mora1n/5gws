@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"strconv"
 	"time"
+
+	"github.com/morain/5gws/internal/diagnostics"
 )
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +44,23 @@ func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) diagnostics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"processes": s.Supervisor.Status(), "logs": s.Supervisor.Logs().Tail(40)})
+}
+
+func (s *Server) runDiagnostics(w http.ResponseWriter, r *http.Request) {
+	scope := r.URL.Query().Get("scope")
+	if scope == "" {
+		scope = diagnostics.ScopeAll
+	}
+	if !diagnostics.ValidScope(scope) {
+		writeStatusError(w, http.StatusBadRequest, "invalid diagnostics scope")
+		return
+	}
+	active, err := s.Service.Active(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Diagnostics.Run(r.Context(), active.Bundle.Config, scope))
 }
 
 func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {

@@ -1,4 +1,4 @@
-import type { ActiveRules, Bundle, Dashboard, IOSProfile, Revision } from './types'
+import type { ActiveRules, Bundle, Dashboard, Diagnostics, IOSProfile, Metric, Revision } from './types'
 
 export class APIError extends Error {
   constructor(message: string, readonly status: number) {
@@ -25,6 +25,8 @@ export const api = {
   logout: () => request('/api/v1/session', { method: 'DELETE' }),
   me: () => request<{ username: string }>('/api/v1/me'),
   dashboard: () => request<Dashboard>('/api/v1/dashboard'),
+	metrics: () => request<{ metrics: Metric[] }>('/api/v1/metrics'),
+	runDiagnostics: (scope = 'all') => request<Diagnostics>(`/api/v1/diagnostics/run?scope=${encodeURIComponent(scope)}`, { method: 'POST' }),
 	active: () => request<Revision>('/api/v1/active'),
 	activeRules: () => request<ActiveRules>('/api/v1/active/rules'),
   draft: () => request<Revision>('/api/v1/draft'),

@@ -14,9 +14,42 @@
     <ListField v-model="bundle.config.dns.upstreams_overseas_private" label="内网海外上游" />
     <ListField v-model="bundle.config.dns.upstreams_overseas_public" label="公网海外上游" />
   </div></section>
+  <section class="panel-section">
+    <div class="mb-3 flex flex-wrap items-center justify-between gap-2"><div><h3 class="font-semibold">已应用 DNS 状态</h3><div class="mt-1 text-xs text-base-content/55">{{ checkedAt }}</div></div><button class="btn btn-ghost btn-square btn-sm" title="检测 DNS 与 DoT" :disabled="diagnosticsBusy" @click="$emit('refresh-diagnostics')"><RefreshCw class="size-4" :class="{ 'animate-spin': diagnosticsBusy }" /></button></div>
+    <div class="hidden overflow-x-auto border border-base-300 md:block"><table class="table table-sm"><thead><tr><th>解析池</th><th>上游</th><th>协议</th><th>状态</th><th>延迟</th><th>结果</th></tr></thead><tbody>
+      <tr v-for="item in diagnostics?.dns || []" :key="`${item.pool}-${item.upstream}`"><td>{{ poolName(item.pool) }}</td><td class="max-w-xs break-all mono text-xs">{{ item.upstream }}</td><td class="uppercase">{{ item.protocol }}</td><td><span class="badge badge-sm" :class="item.status === 'ok' ? 'badge-success' : 'badge-error'">{{ item.status === 'ok' ? '正常' : '异常' }}</span></td><td>{{ item.latency_ms.toFixed(1) }} ms</td><td class="max-w-sm break-words text-xs text-base-content/65">{{ item.status === 'ok' ? (item.answers?.join(', ') || '响应正常') : item.error }}</td></tr>
+      <tr v-if="!diagnostics?.dns?.length"><td colspan="6" class="text-center text-base-content/50">暂无检测结果</td></tr>
+    </tbody></table></div>
+    <div class="divide-y divide-base-300 border border-base-300 md:hidden">
+      <div v-for="item in diagnostics?.dns || []" :key="`${item.pool}-${item.upstream}-mobile`" class="p-3">
+        <div class="flex items-start justify-between gap-3"><div class="min-w-0"><div class="font-medium">{{ poolName(item.pool) }} · {{ item.protocol.toUpperCase() }}</div><div class="mt-1 break-all mono text-xs text-base-content/60">{{ item.upstream }}</div></div><span class="badge badge-sm shrink-0" :class="item.status === 'ok' ? 'badge-success' : 'badge-error'">{{ item.status === 'ok' ? `${item.latency_ms.toFixed(1)} ms` : '异常' }}</span></div>
+        <div class="mt-2 break-words text-xs" :class="item.status === 'ok' ? 'text-base-content/60' : 'text-error'">{{ item.status === 'ok' ? (item.answers?.join(', ') || '响应正常') : item.error }}</div>
+      </div>
+      <div v-if="!diagnostics?.dns?.length" class="p-6 text-center text-sm text-base-content/50">暂无检测结果</div>
+    </div>
+    <div class="mt-4 border border-base-300 bg-base-100 p-3">
+      <div class="flex flex-wrap items-center gap-2"><span class="font-medium">DoT</span><span class="badge badge-sm" :class="dotStatusClass">{{ dotStatusText }}</span><span class="mono text-sm">{{ diagnostics?.dot?.domain || bundle.config.dns.dot_domain }}</span></div>
+      <div class="mt-2 text-sm text-base-content/65">{{ dotDetail }}</div>
+    </div>
+  </section>
 </template>
 <script setup lang="ts">
-import type { Bundle } from '@/types'
+import { computed } from 'vue'
+import { RefreshCw } from '@lucide/vue'
+import type { Bundle, Diagnostics } from '@/types'
 import ListField from '@/components/ListField.vue'
 const bundle = defineModel<Bundle>('bundle', { required: true })
+const props = defineProps<{ diagnostics: Diagnostics | null; diagnosticsBusy: boolean }>()
+defineEmits<{ 'refresh-diagnostics': [] }>()
+const checkedAt = computed(() => props.diagnostics ? `检测于 ${new Date(props.diagnostics.checked_at).toLocaleString()}` : '尚未检测')
+const dotStatusClass = computed(() => props.diagnostics?.dot?.status === 'ok' ? (props.diagnostics.dot.certificate_status === 'warning' ? 'badge-warning' : 'badge-success') : 'badge-error')
+const dotStatusText = computed(() => props.diagnostics?.dot?.status === 'ok' ? (props.diagnostics.dot.certificate_status === 'warning' ? '证书即将到期' : '正常') : '异常')
+const dotDetail = computed(() => {
+  const dot = props.diagnostics?.dot
+  if (!dot) return '暂无检测结果'
+  if (dot.status !== 'ok') return dot.error || 'DoT 检测失败'
+  const expires = dot.expires_at ? new Date(dot.expires_at).toLocaleDateString() : '-'
+  return `${dot.latency_ms?.toFixed(1)} ms · 证书到期 ${expires} · 剩余 ${dot.days_remaining} 天 · 域名匹配`
+})
+function poolName(pool: string) { return pool === 'cn' ? '国内' : pool === 'overseas_private' ? '内网海外' : '公网海外' }
 </script>

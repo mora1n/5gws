@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -18,11 +19,13 @@ type Metrics struct {
 	TCPConnections int     `json:"tcp_connections"`
 	RXBytes        uint64  `json:"rx_bytes"`
 	TXBytes        uint64  `json:"tx_bytes"`
+	Interface      string  `json:"interface"`
+	DNSOK          bool    `json:"dns_ok"`
 	DNSLatencyMS   float64 `json:"dns_latency_ms"`
 }
 
-func CollectMetrics(processes []ProcessStatus, dnsAddress string) Metrics {
-	metric := Metrics{Timestamp: time.Now().Unix(), ProcessCount: len(processes)}
+func CollectMetrics(processes []ProcessStatus, dnsAddress, interfaceName string) Metrics {
+	metric := Metrics{Timestamp: time.Now().Unix(), ProcessCount: len(processes), Interface: interfaceName}
 	pageSize := uint64(os.Getpagesize())
 	for _, process := range processes {
 		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/statm", process.PID))
@@ -36,9 +39,10 @@ func CollectMetrics(processes []ProcessStatus, dnsAddress string) Metrics {
 		}
 	}
 	metric.TCPConnections = countProcLines("/proc/net/tcp") + countProcLines("/proc/net/tcp6")
-	metric.RXBytes, metric.TXBytes = networkBytes()
+	metric.RXBytes, metric.TXBytes = networkBytes(interfaceName)
 	started := time.Now()
 	if probeDNS(dnsAddress) == nil {
+		metric.DNSOK = true
 		metric.DNSLatencyMS = float64(time.Since(started).Microseconds()) / 1000
 	}
 	return metric
@@ -61,21 +65,25 @@ func countProcLines(path string) int {
 	return count
 }
 
-func networkBytes() (uint64, uint64) {
+func networkBytes(interfaceName string) (uint64, uint64) {
 	file, err := os.Open("/proc/net/dev")
 	if err != nil {
 		return 0, 0
 	}
 	defer file.Close()
+	return networkBytesFrom(file, interfaceName)
+}
+
+func networkBytesFrom(reader io.Reader, interfaceName string) (uint64, uint64) {
 	var rx, tx uint64
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.Contains(line, ":") {
 			continue
 		}
 		fields := strings.Fields(strings.Replace(line, ":", " ", 1))
-		if len(fields) < 10 || fields[0] == "lo" {
+		if len(fields) < 10 || fields[0] != interfaceName {
 			continue
 		}
 		in, _ := strconv.ParseUint(fields[1], 10, 64)

@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/morain/5gws/internal/auth"
+	"github.com/morain/5gws/internal/diagnostics"
 	"github.com/morain/5gws/internal/engine"
 	"github.com/morain/5gws/internal/service"
 	"github.com/morain/5gws/internal/updater"
@@ -17,14 +18,15 @@ import (
 const sessionCookie = "5gws_session"
 
 type Server struct {
-	Service    *service.Service
-	Auth       *auth.Manager
-	Supervisor *engine.Supervisor
-	Web        fs.FS
-	Version    string
-	Updater    *updater.Client
-	loginMu    sync.Mutex
-	logins     map[string]loginAttempt
+	Service     *service.Service
+	Auth        *auth.Manager
+	Supervisor  *engine.Supervisor
+	Web         fs.FS
+	Version     string
+	Updater     *updater.Client
+	Diagnostics diagnostics.Runner
+	loginMu     sync.Mutex
+	logins      map[string]loginAttempt
 }
 
 func (s *Server) Router(local bool) http.Handler {
@@ -61,6 +63,7 @@ func (s *Server) Router(local bool) http.Handler {
 		router.Get("/api/v1/logs", s.logs)
 		router.Get("/api/v1/logs/stream", s.logsStream)
 		router.Get("/api/v1/diagnostics", s.diagnostics)
+		router.Post("/api/v1/diagnostics/run", s.runDiagnostics)
 		router.Get("/api/v1/backup", s.exportBackup)
 		router.Post("/api/v1/backup", s.importBackup)
 		router.Get("/api/v1/ios/profile", s.iosProfile)

@@ -7,13 +7,13 @@
     <main class="min-w-0 flex-1 overflow-y-auto pb-16 lg:pb-0">
       <header class="sticky top-0 z-20 flex min-h-16 flex-wrap items-center justify-between gap-2 border-b border-base-300 bg-base-100/95 px-4 py-2 backdrop-blur sm:px-6">
         <div class="min-w-0 truncate font-medium">{{ pageTitle }}</div>
-        <div class="flex items-center gap-2"><button class="btn btn-ghost btn-square btn-sm" :title="themeTitle" @click="toggleTheme"><Moon v-if="theme === 'light-neutral'" class="size-4" /><Sun v-else class="size-4" /></button><button class="btn btn-ghost btn-sm" :disabled="busy || !draft" @click="save"><Save class="size-4" />保存</button><button class="btn btn-outline btn-sm" :disabled="busy" @click="validate"><ShieldCheck class="size-4" />预检</button><button class="btn btn-primary btn-sm" :disabled="busy" @click="apply"><Play class="size-4" />应用</button></div>
+        <div class="flex items-center gap-2"><button class="btn btn-ghost btn-square btn-sm" :title="themeTitle" @click="toggleTheme"><Moon v-if="theme === 'light-neutral'" class="size-4" /><Sun v-else class="size-4" /></button><template v-if="editablePage"><button class="btn btn-ghost btn-sm" :disabled="busy || !draft" @click="save"><Save class="size-4" />保存</button><button class="btn btn-outline btn-sm" :disabled="busy" @click="validate"><ShieldCheck class="size-4" />预检</button><button class="btn btn-primary btn-sm" :disabled="busy" @click="apply"><Play class="size-4" />应用</button></template></div>
       </header>
       <div v-if="message" class="mx-4 mt-4 flex items-center gap-2 border px-3 py-2 text-sm sm:mx-6" :class="error ? 'border-error/40 bg-error/10 text-error' : 'border-success/40 bg-success/10 text-success'"><CircleAlert v-if="error" class="size-4 shrink-0" /><CircleCheck v-else class="size-4 shrink-0" /><span class="break-all">{{ message }}</span><button class="btn btn-ghost btn-square btn-xs ml-auto" title="关闭" @click="message = ''"><X class="size-4" /></button></div>
-      <OverviewPage v-if="page === 'overview'" :dashboard="dashboard" @refresh="refresh" />
-      <NetworkPage v-else-if="page === 'network' && draft" v-model:bundle="draft.bundle" />
+      <OverviewPage v-if="page === 'overview'" :dashboard="dashboard" :metrics="metrics" :diagnostics="diagnostics" :runtime-busy="runtimeBusy" @refresh="refresh" @refresh-runtime="refreshRuntime" />
+      <NetworkPage v-else-if="page === 'network' && draft" v-model:bundle="draft.bundle" :diagnostics="diagnostics" :diagnostics-busy="diagnosticsBusy" @refresh-diagnostics="runDiagnostics" />
       <RulesPage v-else-if="page === 'rules' && draft" v-model:bundle="draft.bundle" :active-revision="dashboard?.active_revision || 0" @error="show($event, true)" />
-      <ExitsPage v-else-if="page === 'exits' && draft" v-model:bundle="draft.bundle" />
+      <ExitsPage v-else-if="page === 'exits' && draft" v-model:bundle="draft.bundle" :diagnostics="diagnostics" :diagnostics-busy="diagnosticsBusy" @refresh-diagnostics="runDiagnostics" />
       <LogsPage v-else-if="page === 'logs'" @error="show($event, true)" />
       <SettingsPage v-else-if="page === 'settings' && draft" v-model:bundle="draft.bundle" :active-revision="dashboard?.active_revision || 0" @imported="reload" @message="show($event, false)" @error="show($event, true)" @signed-out="authenticated = false" />
     </main>
@@ -21,25 +21,33 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { CircleAlert, CircleCheck, LoaderCircle, Moon, Play, Save, ShieldCheck, Sun, X } from '@lucide/vue'
-import { APIError, api } from '@/api'; import type { Dashboard, Revision } from '@/types'
+import { APIError, api } from '@/api'; import type { Dashboard, Diagnostics, Metric, Revision } from '@/types'
 import AuthView from '@/components/AuthView.vue'; import AppNav from '@/components/AppNav.vue'
 import OverviewPage from '@/pages/OverviewPage.vue'; import NetworkPage from '@/pages/NetworkPage.vue'; import RulesPage from '@/pages/RulesPage.vue'; import ExitsPage from '@/pages/ExitsPage.vue'; import LogsPage from '@/pages/LogsPage.vue'; import SettingsPage from '@/pages/SettingsPage.vue'
 
 const loading=ref(true), authenticated=ref(false), needsSetup=ref(false), busy=ref(false), error=ref(false)
 const page=ref('overview'), message=ref(''), startupError=ref(''), dashboard=ref<Dashboard|null>(null), draft=ref<Revision|null>(null)
+const metrics=ref<Metric[]>([]), diagnostics=ref<Diagnostics|null>(null), diagnosticsBusy=ref(false), metricsBusy=ref(false)
+let metricsTimer: number | undefined
 const theme=ref<'light-neutral'|'dark-neutral'>(initialTheme())
 const titles:Record<string,string>={overview:'概览',network:'DNS 与网络',rules:'规则',exits:'出口',logs:'日志',settings:'设置'}
 const pageTitle=computed(()=>titles[page.value]||'5gws')
+const editablePage=computed(()=>['network','rules','exits','settings'].includes(page.value))
+const runtimeBusy=computed(()=>metricsBusy.value || diagnosticsBusy.value)
 const themeTitle=computed(()=>theme.value === 'light-neutral' ? '切换到深色模式' : '切换到浅色模式')
-async function start(){ authenticated.value=true; await reload() }
+async function start(){ authenticated.value=true; await reload(); void refreshRuntime(); startMetricsTimer() }
 async function reload(){ [dashboard.value,draft.value]=await Promise.all([api.dashboard(),api.draft()]) }
 async function refresh(){ try{ await reload() }catch(cause){ show(cause,true) } }
-async function save(){ if(!draft.value)return; await action(async()=>{ draft.value=await api.saveDraft(draft.value!.bundle); await reload(); return '草稿已保存' }) }
+async function save(){ if(!draft.value)return; await action(async()=>{ draft.value=await api.saveDraft(draft.value!.bundle); await reload(); return '配置已保存' }) }
 async function validate(){ await action(async()=>{ const result=await api.validate(); await reload(); return `预检通过，共 ${result.rule_count} 条规则` }) }
 async function apply(){ await action(async()=>{ const result=await api.apply(); await reload(); return `已应用 revision ${result.id}` }) }
 async function action(fn:()=>Promise<string>){ busy.value=true; try{ show(await fn(),false) }catch(cause){ show(cause,true) }finally{ busy.value=false } }
+async function loadMetrics(){ if(metricsBusy.value)return; metricsBusy.value=true; try{ metrics.value=(await api.metrics()).metrics }catch(cause){ show(cause,true) }finally{ metricsBusy.value=false } }
+async function runDiagnostics(){ if(diagnosticsBusy.value)return; diagnosticsBusy.value=true; try{ diagnostics.value=await api.runDiagnostics() }catch(cause){ show(cause,true) }finally{ diagnosticsBusy.value=false } }
+async function refreshRuntime(){ await Promise.all([loadMetrics(),runDiagnostics()]) }
+function startMetricsTimer(){ if(metricsTimer) window.clearInterval(metricsTimer); metricsTimer=window.setInterval(loadMetrics,30000) }
 function show(value:unknown,isError:boolean){ error.value=isError; message.value=value instanceof Error?value.message:String(value) }
 function initialTheme(){
   const saved = localStorage.getItem('5gws-theme')
@@ -55,7 +63,7 @@ function toggleTheme(){
   localStorage.setItem('5gws-theme', theme.value)
   applyTheme()
 }
-async function logout(){ await api.logout(); authenticated.value=false; needsSetup.value=false }
+async function logout(){ await api.logout(); authenticated.value=false; needsSetup.value=false; if(metricsTimer)window.clearInterval(metricsTimer) }
 async function initialize(){
   loading.value=true; startupError.value=''
   try {
@@ -68,4 +76,5 @@ async function initialize(){
   finally { loading.value=false }
 }
 onMounted(()=>{ applyTheme(); initialize() })
+onUnmounted(()=>{ if(metricsTimer)window.clearInterval(metricsTimer) })
 </script>

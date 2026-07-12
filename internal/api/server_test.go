@@ -14,6 +14,7 @@ import (
 
 	"github.com/morain/5gws/internal/auth"
 	"github.com/morain/5gws/internal/config"
+	"github.com/morain/5gws/internal/diagnostics"
 	"github.com/morain/5gws/internal/engine"
 	"github.com/morain/5gws/internal/rules"
 	"github.com/morain/5gws/internal/service"
@@ -166,6 +167,54 @@ func TestSPAAssetCacheHeaders(t *testing.T) {
 	response := serve(server.Router(false), asset)
 	if got := response.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
 		t.Fatalf("asset Cache-Control = %q", got)
+	}
+}
+
+func TestMetricsAreChronologicalAndExposeDNSStatus(t *testing.T) {
+	server, closeState := testServer(t)
+	defer closeState()
+	now := time.Now().Unix()
+	for _, metric := range []engine.Metrics{
+		{Timestamp: now, Interface: "eth0", DNSOK: false},
+		{Timestamp: now + 1, Interface: "eth0", DNSOK: true, DNSLatencyMS: 4.2},
+	} {
+		if err := server.Service.Store().PutMetric(context.Background(), metric.Timestamp, metric); err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := serve(server.Router(true), request(t, http.MethodGet, "/api/v1/metrics", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("metrics: %d %s", response.Code, response.Body.String())
+	}
+	var body struct {
+		Metrics []engine.Metrics `json:"metrics"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Metrics) != 2 || body.Metrics[0].Timestamp != now || body.Metrics[1].Timestamp != now+1 || body.Metrics[0].DNSOK || !body.Metrics[1].DNSOK {
+		t.Fatalf("metrics = %+v", body.Metrics)
+	}
+}
+
+func TestRunDiagnosticsValidatesScopeAndOmitsConfigurationSecrets(t *testing.T) {
+	server, closeState := testServer(t)
+	defer closeState()
+	invalid := serve(server.Router(true), request(t, http.MethodPost, "/api/v1/diagnostics/run?scope=invalid", nil))
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid scope = %d %s", invalid.Code, invalid.Body.String())
+	}
+	egress := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("203.0.113.30")) }))
+	defer egress.Close()
+	server.Diagnostics = diagnostics.Runner{EgressURL: egress.URL}
+	response := serve(server.Router(true), request(t, http.MethodPost, "/api/v1/diagnostics/run?scope=exits", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"egress_ip":"203.0.113.30"`) {
+		t.Fatalf("diagnostics = %d %s", response.Code, response.Body.String())
+	}
+	for _, secret := range []string{"password", "private_key", "session"} {
+		if strings.Contains(response.Body.String(), secret) {
+			t.Fatalf("diagnostics contains %q: %s", secret, response.Body.String())
+		}
 	}
 }
 
