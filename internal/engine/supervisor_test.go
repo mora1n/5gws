@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -40,6 +41,15 @@ func TestManagedCommandsUseSingleHAProxyProcess(t *testing.T) {
 func TestReadinessTimeoutCoversSlowSmartDNSStartup(t *testing.T) {
 	if readinessTimeout < 15*time.Second {
 		t.Fatalf("readiness timeout = %s, want at least 15s", readinessTimeout)
+	}
+}
+
+func TestReadinessIncludesTCPGateway(t *testing.T) {
+	bundle := store.Bundle{Config: config.Config{Network: config.NetworkConfig{HTTPRedirectPort: 18080, HTTPSRedirectPort: 18443, TCPRedirectPort: 18082}, DNS: config.DNSConfig{ListenTCP: "0.0.0.0:1053"}}}
+	addresses := readinessAddresses(bundle)
+	want := "127.0.0.1:18082"
+	if !slices.Contains(addresses, want) {
+		t.Fatalf("readiness addresses=%v, missing %s", addresses, want)
 	}
 }
 

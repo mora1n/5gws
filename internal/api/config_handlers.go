@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"strconv"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/morain/5gws/internal/engine"
@@ -20,14 +18,9 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	draft, err := s.Service.Draft(r.Context())
-	if err != nil {
-		writeError(w, err)
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"version": s.Version, "active_revision": active.ID, "draft_revision": draft.ID,
-		"dirty": active.ID != draft.ID, "rules": len(active.Bundle.ResolvedRules), "processes": s.Supervisor.Status(),
+		"version": s.Version, "active_revision": active.ID,
+		"rules": len(active.Bundle.ResolvedRules), "processes": s.Supervisor.Status(),
 	})
 }
 
@@ -47,6 +40,54 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		metrics = append(metrics, metric)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"metrics": metrics})
+}
+
+func (s *Server) currentConfig(w http.ResponseWriter, r *http.Request) {
+	active, err := s.Service.Active(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	active.Bundle.ResolvedRules = nil
+	writeJSON(w, http.StatusOK, active.Bundle)
+}
+
+func (s *Server) validateConfig(w http.ResponseWriter, r *http.Request) {
+	var bundle store.Bundle
+	if !decodeJSON(w, r, &bundle) {
+		return
+	}
+	result, err := s.Service.ValidateBundle(r.Context(), bundle)
+	respond(w, map[string]any{"rule_count": result.RuleCount, "warnings": result.Warnings}, err)
+}
+
+func (s *Server) applyConfig(w http.ResponseWriter, r *http.Request) {
+	var bundle store.Bundle
+	if !decodeJSON(w, r, &bundle) {
+		return
+	}
+	result, err := s.Service.ApplyBundle(r.Context(), bundle)
+	respond(w, result, err)
+}
+
+func (s *Server) importConfig(w http.ResponseWriter, r *http.Request) {
+	data, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	var bundle store.Bundle
+	if err := toml.Unmarshal(data, &bundle); err != nil {
+		writeStatusError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	bundle.Config.ApplyDefaults()
+	if err := bundle.Config.Validate(); err != nil {
+		writeStatusError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	bundle.ResolvedRules = nil
+	writeJSON(w, http.StatusOK, bundle)
 }
 
 func (s *Server) active(w http.ResponseWriter, r *http.Request) {
@@ -76,21 +117,6 @@ func (s *Server) validateDraft(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	revision, err := s.Service.Apply(r.Context())
-	respond(w, revision, err)
-}
-
-func (s *Server) revisions(w http.ResponseWriter, r *http.Request) {
-	items, err := s.Service.Store().Revisions(r.Context(), 100)
-	respond(w, map[string]any{"revisions": items}, err)
-}
-
-func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		writeStatusError(w, http.StatusBadRequest, "invalid revision id")
-		return
-	}
-	revision, err := s.Service.Rollback(r.Context(), id)
 	respond(w, revision, err)
 }
 

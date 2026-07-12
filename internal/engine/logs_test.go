@@ -3,6 +3,7 @@ package engine
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLogBufferWrapsAndTailsLines(t *testing.T) {
@@ -27,6 +28,34 @@ func TestLogBufferKeepsNewestOversizedWrite(t *testing.T) {
 	}
 	if got, want := buffer.Tail(0), "23456789"; got != want {
 		t.Fatalf("Tail(0) = %q, want %q", got, want)
+	}
+}
+
+func TestLogBufferBroadcastsToEverySubscriber(t *testing.T) {
+	buffer := NewLogBuffer(1024)
+	first, cancelFirst := buffer.Subscribe()
+	second, cancelSecond := buffer.Subscribe()
+	defer cancelSecond()
+	_, _ = buffer.Write([]byte("ready\n"))
+	for index, subscriber := range []<-chan uint64{first, second} {
+		select {
+		case sequence := <-subscriber:
+			if sequence != 1 {
+				t.Fatalf("subscriber %d sequence=%d", index, sequence)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("subscriber %d did not receive update", index)
+		}
+	}
+	cancelFirst()
+	_, _ = buffer.Write([]byte("running\n"))
+	select {
+	case sequence := <-second:
+		if sequence != 2 {
+			t.Fatalf("second sequence=%d", sequence)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("remaining subscriber did not receive update")
 	}
 }
 

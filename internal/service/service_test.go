@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/morain/5gws/internal/config"
@@ -13,15 +12,25 @@ import (
 )
 
 type testRuntime struct {
-	prepareErr error
-	applyErr   error
+	preflightErr   error
+	prepareErr     error
+	applyErr       error
+	preflightCalls int
+	prepareCalls   int
+	applyCalls     int
+}
+
+func (r *testRuntime) Preflight(_ context.Context, _ store.Bundle) error {
+	r.preflightCalls++
+	return r.preflightErr
 }
 
 func (r *testRuntime) Prepare(_ context.Context, id int64, _ store.Bundle) (string, error) {
+	r.prepareCalls++
 	return filepath.Join("/tmp", "revision"), r.prepareErr
 }
 
-func TestValidateMarksFailedRevision(t *testing.T) {
+func TestValidateBundleDoesNotPersistRevision(t *testing.T) {
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -31,19 +40,49 @@ func TestValidateMarksFailedRevision(t *testing.T) {
 	if _, err := state.Initialize(ctx, serviceBundle()); err != nil {
 		t.Fatal(err)
 	}
-	runtime := &testRuntime{prepareErr: errors.New("haproxy validation failed")}
-	if _, err := newTestService(t, state, runtime).ValidateDraft(ctx); err == nil {
-		t.Fatal("expected validation failure")
+	runtime := &testRuntime{}
+	if _, err := newTestService(t, state, runtime).ValidateBundle(ctx, serviceBundle()); err != nil {
+		t.Fatal(err)
 	}
-	revisions, err := state.Revisions(ctx, 10)
+	var count int
+	if err := state.DB().QueryRowContext(ctx, "SELECT COUNT(*) FROM revisions").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || runtime.preflightCalls != 1 || runtime.prepareCalls != 0 {
+		t.Fatalf("revisions=%d preflight=%d prepare=%d", count, runtime.preflightCalls, runtime.prepareCalls)
+	}
+}
+func (r *testRuntime) Apply(_ context.Context, _ string, _ store.Bundle) error {
+	r.applyCalls++
+	return r.applyErr
+}
+
+func TestApplyBundleNoChangeDoesNotTouchRuntime(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if revisions[0].Status != "failed" || !strings.Contains(revisions[0].Error, "haproxy validation failed") {
-		t.Fatalf("prepared revision was not marked failed: %#v", revisions[0])
+	defer state.Close()
+	active, err := state.Initialize(context.Background(), serviceBundle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := state.SaveDraft(context.Background(), active.Bundle); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &testRuntime{}
+	result, err := newTestService(t, state, runtime).ApplyBundle(context.Background(), active.Bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed || result.RevisionID != active.ID || runtime.preflightCalls != 0 || runtime.prepareCalls != 0 || runtime.applyCalls != 0 {
+		t.Fatalf("result=%+v runtime=%+v", result, runtime)
+	}
+	var count int
+	if err := state.DB().QueryRow("SELECT COUNT(*) FROM revisions").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("revision count=%d, %v", count, err)
 	}
 }
-func (r *testRuntime) Apply(_ context.Context, _ string, _ store.Bundle) error { return r.applyErr }
 
 func TestApplyDoesNotActivateRuntimeFailure(t *testing.T) {
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
@@ -72,6 +111,14 @@ func TestApplyDoesNotActivateRuntimeFailure(t *testing.T) {
 	}
 	if current.ID != active.ID {
 		t.Fatalf("active changed to %d", current.ID)
+	}
+	draft, err := state.Draft(ctx)
+	if err != nil || draft.ID != active.ID {
+		t.Fatalf("draft was not restored to active: %+v, %v", draft, err)
+	}
+	var count int
+	if err := state.DB().QueryRowContext(ctx, "SELECT COUNT(*) FROM revisions").Scan(&count); err != nil || count != 1 {
+		t.Fatalf("revision count=%d, %v", count, err)
 	}
 }
 

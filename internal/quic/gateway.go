@@ -50,14 +50,13 @@ func RunCompiled(ctx context.Context, cfg config.Config, norm rules.Normalized, 
 	if err != nil {
 		return err
 	}
-	defer tcpGateway.close()
 	errCh := make(chan error, 2)
+	var gw *Gateway
 	if cfg.Network.QUICPolicy == "proxy" {
-		gw, err := listenQUICGateway(cfg, compiled)
+		gw, err = listenQUICGateway(cfg, compiled)
 		if err != nil {
 			return err
 		}
-		defer gw.listener.Close()
 		go gw.gc(ctx)
 		go func() {
 			errCh <- gw.serve(ctx)
@@ -65,10 +64,31 @@ func RunCompiled(ctx context.Context, cfg config.Config, norm rules.Normalized, 
 	} else {
 		log.Printf("quic gateway disabled by quic_policy=%s", cfg.Network.QUICPolicy)
 	}
+	stopClose := context.AfterFunc(ctx, func() {
+		tcpGateway.close()
+		if gw != nil {
+			gw.close()
+		}
+	})
+	defer stopClose()
+	defer tcpGateway.close()
+	if gw != nil {
+		defer gw.close()
+	}
 	go func() {
 		errCh <- tcpGateway.serve(ctx)
 	}()
 	return <-errCh
+}
+
+func (g *Gateway) close() {
+	_ = g.listener.Close()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for key, session := range g.sessions {
+		_ = session.backendConn.Close()
+		delete(g.sessions, key)
+	}
 }
 
 func listenQUICGateway(cfg config.Config, compiled *rules.Compiled) (*Gateway, error) {

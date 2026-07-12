@@ -23,12 +23,14 @@ import (
 
 type apiRuntime struct{}
 
+func (apiRuntime) Preflight(_ context.Context, _ store.Bundle) error { return nil }
+
 func (apiRuntime) Prepare(_ context.Context, _ int64, _ store.Bundle) (string, error) {
 	return "/tmp/revision", nil
 }
 func (apiRuntime) Apply(_ context.Context, _ string, _ store.Bundle) error { return nil }
 
-func TestBootstrapLoginAndProtectedDraft(t *testing.T) {
+func TestBootstrapLoginAndProtectedConfig(t *testing.T) {
 	server, closeState := testServer(t)
 	defer closeState()
 	router := server.Router(false)
@@ -52,11 +54,19 @@ func TestBootstrapLoginAndProtectedDraft(t *testing.T) {
 	if session == nil || !session.HttpOnly || !session.Secure {
 		t.Fatalf("session cookie = %#v", session)
 	}
-	draft := request(t, http.MethodGet, "/api/v1/draft", nil)
-	draft.RemoteAddr = "192.0.2.10:4002"
-	draft.AddCookie(session)
-	if response := serve(router, draft); response.Code != http.StatusOK {
-		t.Fatalf("draft: %d %s", response.Code, response.Body.String())
+	configRequest := request(t, http.MethodGet, "/api/v1/config", nil)
+	configRequest.RemoteAddr = "192.0.2.10:4002"
+	configRequest.AddCookie(session)
+	if response := serve(router, configRequest); response.Code != http.StatusOK {
+		t.Fatalf("config: %d %s", response.Code, response.Body.String())
+	}
+	for _, path := range []string{"/api/v1/active", "/api/v1/draft", "/api/v1/revisions", "/api/v1/revisions/1/rollback"} {
+		req := request(t, http.MethodGet, path, nil)
+		req.RemoteAddr = "192.0.2.10:4003"
+		req.AddCookie(session)
+		if response := serve(router, req); response.Code != http.StatusNotFound {
+			t.Fatalf("%s status=%d, want 404", path, response.Code)
+		}
 	}
 }
 
@@ -125,6 +135,36 @@ func TestDraftOmitsResolvedRulesAndActiveRulesAreSummarized(t *testing.T) {
 	}
 }
 
+func TestWebConfigValidateAndNoChangeApplyDoNotCreateRevisions(t *testing.T) {
+	server, closeState := testServer(t)
+	defer closeState()
+	active, err := server.Service.Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	active.Bundle.ResolvedRules = nil
+	router := server.Router(true)
+	validate := serve(router, request(t, http.MethodPost, "/api/v1/config/validate", active.Bundle))
+	if validate.Code != http.StatusOK {
+		t.Fatalf("validate=%d %s", validate.Code, validate.Body.String())
+	}
+	apply := serve(router, request(t, http.MethodPost, "/api/v1/config/apply", active.Bundle))
+	if apply.Code != http.StatusOK || !strings.Contains(apply.Body.String(), `"changed":false`) {
+		t.Fatalf("apply=%d %s", apply.Code, apply.Body.String())
+	}
+	var count int
+	if err := server.Service.Store().DB().QueryRow("SELECT COUNT(*) FROM revisions").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("revision count=%d, want 1", count)
+	}
+	configResponse := serve(router, request(t, http.MethodGet, "/api/v1/config", nil))
+	if strings.Contains(configResponse.Body.String(), "resolved_rules") {
+		t.Fatalf("config leaked resolved rules: %s", configResponse.Body.String())
+	}
+}
+
 func TestActiveRuleSummaryNormalizesOnlyLegacySingleImports(t *testing.T) {
 	bundle := store.Bundle{
 		Rules: rules.File{Imports: []rules.Import{
@@ -167,6 +207,16 @@ func TestSPAAssetCacheHeaders(t *testing.T) {
 	response := serve(server.Router(false), asset)
 	if got := response.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
 		t.Fatalf("asset Cache-Control = %q", got)
+	}
+	unknownAPI := request(t, http.MethodGet, "/api/v1/revisions", nil)
+	unknownAPI.RemoteAddr = "192.0.2.10:4000"
+	if response := serve(server.Router(false), unknownAPI); response.Code != http.StatusNotFound {
+		t.Fatalf("unknown API status = %d, want 404", response.Code)
+	}
+	historyRoute := request(t, http.MethodGet, "/rules", nil)
+	historyRoute.RemoteAddr = "192.0.2.10:4000"
+	if response := serve(server.Router(false), historyRoute); response.Code != http.StatusOK || response.Body.String() != "index" {
+		t.Fatalf("history route = %d %q", response.Code, response.Body.String())
 	}
 }
 

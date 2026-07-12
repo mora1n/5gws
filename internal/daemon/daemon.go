@@ -50,6 +50,21 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	if err != nil {
 		return err
 	}
+	if draft.Status == "failed" || active.Bundle.SameInput(draft.Bundle) {
+		draft, err = state.ResetDraftToActive(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	if err := state.PruneRevisions(ctx); err != nil {
+		return err
+	}
+	if err := service.PruneRevisionDirs(active.Bundle.Config.System.StateDir, active.ID, draft.ID); err != nil {
+		return err
+	}
+	if err := service.PrunePreflightDirs(active.Bundle.Config.System.StateDir); err != nil {
+		return err
+	}
 	logs := engine.NewLogBuffer(2 << 20)
 	supervisor := engine.NewSupervisor(active.Bundle.Config.System.StateDir, logs)
 	root, err := supervisor.Prepare(ctx, active.ID, active.Bundle)

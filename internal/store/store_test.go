@@ -46,6 +46,45 @@ func TestRevisionLifecycle(t *testing.T) {
 	}
 }
 
+func TestResetDraftAndPruneRevisions(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	active, err := s.Initialize(ctx, validBundle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := validBundle()
+	bundle.Config.Logging.Level = "debug"
+	draft, err := s.SaveDraft(ctx, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ResetDraftToActive(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PruneRevisions(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := s.DB().QueryRowContext(ctx, "SELECT COUNT(*) FROM revisions").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("revision count=%d, want 1", count)
+	}
+	current, err := s.Draft(ctx)
+	if err != nil || current.ID != active.ID || current.ID == draft.ID {
+		t.Fatalf("draft=%+v, err=%v", current, err)
+	}
+	if err := s.Compact(ctx); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+}
+
 func TestRevisionReadAppliesNewConfigDefaults(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "5gws.db"))
 	if err != nil {

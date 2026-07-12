@@ -14,6 +14,10 @@ import (
 func (s *Server) spaHandler() http.Handler {
 	files := http.FileServer(http.FS(s.Web))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			http.NotFound(w, r)
+			return
+		}
 		path := strings.TrimPrefix(r.URL.Path, "/")
 		if path != "" {
 			if _, err := fs.Stat(s.Web, path); err == nil {

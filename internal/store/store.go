@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -24,6 +25,12 @@ type Bundle struct {
 
 func (b Bundle) Normalized() rules.Normalized {
 	return rules.Normalized{Rules: b.ResolvedRules}
+}
+
+func (b Bundle) SameInput(other Bundle) bool {
+	b.Config.ApplyDefaults()
+	other.Config.ApplyDefaults()
+	return reflect.DeepEqual(b.Config, other.Config) && reflect.DeepEqual(b.Rules, other.Rules)
 }
 
 type Revision struct {
@@ -219,37 +226,31 @@ func (s *Store) Activate(ctx context.Context, revisionID int64) (Revision, error
 	return s.Active(ctx)
 }
 
-func (s *Store) Fail(ctx context.Context, revisionID int64, cause error) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE revisions SET status = 'failed', error = ? WHERE id = ?`, cause.Error(), revisionID)
-	return err
-}
-
-func (s *Store) DraftFromRevision(ctx context.Context, revisionID int64) (Revision, error) {
-	rev, err := scanRevision(s.db.QueryRowContext(ctx, revisionSelect+` WHERE id = ?`, revisionID))
+func (s *Store) ResetDraftToActive(ctx context.Context) (Revision, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE app_state SET draft_revision_id = active_revision_id WHERE id = 1`)
 	if err != nil {
 		return Revision{}, err
 	}
-	return s.SaveDraft(ctx, rev.Bundle)
+	if n, _ := result.RowsAffected(); n != 1 {
+		return Revision{}, ErrNotInitialized
+	}
+	return s.Active(ctx)
 }
 
-func (s *Store) Revisions(ctx context.Context, limit int) ([]Revision, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
-	}
-	rows, err := s.db.QueryContext(ctx, revisionSelect+` ORDER BY id DESC LIMIT ?`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Revision
-	for rows.Next() {
-		rev, err := scanRevision(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, rev)
-	}
-	return out, rows.Err()
+func (s *Store) PruneRevisions(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM revisions
+		WHERE id NOT IN (SELECT active_revision_id FROM app_state UNION SELECT draft_revision_id FROM app_state)`)
+	return err
+}
+
+func (s *Store) Compact(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, "VACUUM")
+	return err
+}
+
+func (s *Store) Fail(ctx context.Context, revisionID int64, cause error) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE revisions SET status = 'failed', error = ? WHERE id = ?`, cause.Error(), revisionID)
+	return err
 }
 
 type scanner interface {

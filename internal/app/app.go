@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -49,14 +48,14 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return online(http.MethodGet, "/api/v1/diagnostics", stdout)
 	case "logs":
 		return logs(stdout)
+	case "compact":
+		return compact(args[1:], stdout)
 	case "apply":
 		return online(http.MethodPost, "/api/v1/apply", stdout)
 	case "update":
 		return online(http.MethodPost, "/api/v1/update", stdout)
 	case "ios-link":
 		return online(http.MethodGet, "/api/v1/ios/profile", stdout)
-	case "rollback":
-		return rollback(args[1:], stdout)
 	case "export":
 		return exportBackup(args[1:], stdout)
 	case "import":
@@ -77,13 +76,13 @@ Setup:
   install-ssrust      install the pinned shadowsocks-rust runtime
 
 Daemon operations (root, via /run/5gws/control.sock):
-  status              show active/draft revisions and managed processes
+  status              show active configuration and managed processes
   doctor              show runtime diagnostics
   logs                show recent daemon and child-process logs
-  apply               validate and apply the current draft
-  rollback ID         apply a previous revision as a new revision
+  compact             compact SQLite after stopping 5gws.service
+  apply               validate and apply the pending CLI configuration
   export FILE         export the active configuration as TOML
-  import FILE         import TOML as a draft without applying it
+  import FILE         import TOML as pending CLI configuration
   update              install the latest verified release
   ios-link            show the generated iOS profile links
 `)
@@ -157,14 +156,28 @@ func resetAdmin(args []string, out io.Writer) error {
 	return nil
 }
 
-func rollback(args []string, out io.Writer) error {
-	if len(args) != 1 {
-		return errors.New("usage: 5gws rollback REVISION_ID")
+func compact(args []string, out io.Writer) error {
+	flags := flag.NewFlagSet("compact", flag.ContinueOnError)
+	database := flags.String("database", "/var/lib/5gws/5gws.db", "SQLite database path")
+	if err := flags.Parse(args); err != nil {
+		return err
 	}
-	if _, err := strconv.ParseInt(args[0], 10, 64); err != nil {
-		return fmt.Errorf("invalid revision id %q", args[0])
+	if flags.NArg() != 0 {
+		return errors.New("usage: 5gws compact [--database PATH]")
 	}
-	return online(http.MethodPost, "/api/v1/revisions/"+args[0]+"/rollback", out)
+	if os.Geteuid() != 0 {
+		return errors.New("compact must run as root")
+	}
+	state, err := store.Open(filepath.Clean(*database))
+	if err != nil {
+		return err
+	}
+	defer state.Close()
+	if err := state.Compact(context.Background()); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "database compacted")
+	return nil
 }
 
 func exportBackup(args []string, out io.Writer) error {

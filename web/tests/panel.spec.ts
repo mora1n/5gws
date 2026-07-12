@@ -45,7 +45,7 @@ async function mockAPI(page: Page) {
     const json = (value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) })
     if (path === '/api/v1/bootstrap') return json({ needs_setup: false })
     if (path === '/api/v1/me') return json({ username: 'admin' })
-    if (path === '/api/v1/dashboard') return json({ version: '0.2.0', active_revision: 7, draft_revision: 8, dirty: true, rules: 10023, processes: [{ name: 'smartdns', pid: 101 }, { name: 'haproxy', pid: 102 }, { name: 'sslocal', pid: 103 }, { name: 'gateway', pid: 100 }] })
+    if (path === '/api/v1/dashboard') return json({ version: '0.2.0', active_revision: 7, rules: 10023, processes: [{ name: 'smartdns', pid: 101 }, { name: 'haproxy', pid: 102 }, { name: 'sslocal', pid: 103 }, { name: 'gateway', pid: 100 }] })
     if (path === '/api/v1/metrics') return json({ metrics: [
       { timestamp: 1720699200, process_count: 4, rss_bytes: 52428800, tcp_connections: 31, rx_bytes: 1000000, tx_bytes: 2000000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 3.2 },
       { timestamp: 1720699210, process_count: 4, rss_bytes: 53428800, tcp_connections: 35, rx_bytes: 1100000, tx_bytes: 2200000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 4.1 },
@@ -58,7 +58,9 @@ async function mockAPI(page: Page) {
       { name: 'direct', type: 'direct', status: 'ok', egress_status: 'ok', egress_ip: '203.0.113.10', egress_latency_ms: 35.2 },
       { name: 'tokyo-shadowsocks-production-long-name', type: 'shadowsocks-rust', status: 'ok', upstream: 'edge.gateway.example.net:8388', upstream_status: 'ok', upstream_latency_ms: 21.1, egress_status: 'ok', egress_ip: '198.51.100.20', egress_latency_ms: 88.4 },
     ], dot: { domain: 'dns.gateway.example.net', listen: '0.0.0.0:853', status: 'ok', latency_ms: 11.2, certificate_status: 'ok', expires_at: '2026-09-10T00:00:00Z', days_remaining: 60, domain_match: true } })
-    if (path === '/api/v1/active') return json(activeRevision)
+    if (path === '/api/v1/config') return json(bundle)
+		if (path === '/api/v1/config/validate') return json({ rule_count: 10023, warnings: [] })
+		if (path === '/api/v1/config/apply') return json({ changed: false, revision_id: 7, rule_count: 10023, warnings: [] })
     if (path === '/api/v1/active/rules') return json({
       revision_id: 7,
       active_at: activeRevision.active_at,
@@ -69,9 +71,8 @@ async function mockAPI(page: Page) {
         { key: 'DNS:pool:cn', title: 'DNS 解析池 · pool:cn', rule_count: 1, matcher_count: 7, rules: [{ name: 'applied-cn', target: 'pool:cn', matchers: [{ label: 'domain_suffix', count: 7, samples: ['example.cn', 'example.com.cn', 'service.cn', 'cdn.cn', 'portal.cn', 'static.cn'] }] }] },
       ],
     })
-    if (path === '/api/v1/draft') return json(revision)
     if (path === '/api/v1/logs') return json({ logs: 'smartdns ready\nhaproxy ready\ngateway ready' })
-    if (path === '/api/v1/logs/stream') return json({ error: 'stream should not be used' }, 500)
+    if (path === '/api/v1/logs/stream') return route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'id: 1\ndata: {"logs":"smartdns ready\\nhaproxy ready\\ngateway ready"}\n\n' })
     if (path === '/api/v1/ios/profile') return json({ enabled: true, profile_url: 'https://dns.gateway.example.net/ios/5gws-dot.mobileconfig', profile_qr: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' })
     if (path === '/api/v1/update') return json({ current: '0.2.0', latest: '0.2.0', available: false })
     return json({ error: `unhandled test route ${path}` }, 500)
@@ -102,7 +103,8 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
 			if (nav !== '概览') await button.click()
 			await expect(page.getByRole('heading', { name: heading, exact: true }).first()).toBeVisible()
 			if (heading === 'DNS 与网络') {
-				await expect(page.getByRole('button', { name: '保存' })).toBeVisible()
+				await expect(page.getByRole('button', { name: '保存' })).toBeHidden()
+				await expect(page.getByRole('button', { name: '预检' })).toBeVisible()
 				await expect(page.getByLabel('HAProxy 最大连接数')).toBeHidden()
 				await expect(page.getByLabel('缓存条目')).toBeHidden()
 				await expect(page.getByLabel('后端解析器')).toBeHidden()
@@ -121,9 +123,18 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
 			}
 			if (heading === '日志') {
 				await expect(page.getByRole('button', { name: '保存' })).toBeHidden()
-				await expect(page.getByText('最后刷新')).toBeVisible()
+				await expect(page.getByPlaceholder('搜索日志')).toBeVisible()
+				await expect(page.getByText('跟随')).toBeVisible()
 				await page.getByTitle('刷新').click()
 				await expect(page.getByText('smartdns ready')).toBeVisible()
+				await page.getByPlaceholder('搜索日志').fill('haproxy')
+				await expect(page.locator('pre')).toContainText('haproxy ready')
+				await expect(page.locator('pre')).not.toContainText('smartdns ready')
+				await page.getByPlaceholder('搜索日志').fill('')
+				const download = page.waitForEvent('download')
+				await page.getByTitle('下载日志').click()
+				expect((await download).suggestedFilename()).toMatch(/^5gws-.*\.log$/)
+				await page.screenshot({ path: `/tmp/5gws-panel-${viewport.name}-logs.png`, fullPage: true })
 			}
 			if (heading === '设置') {
 				await expect(page.getByRole('heading', { name: '面板', exact: true })).toBeHidden()
@@ -151,4 +162,24 @@ test('theme toggle switches between neutral themes', async ({ page }) => {
   await page.getByTitle(before === 'dark-neutral' ? '切换到浅色模式' : '切换到深色模式').click()
   const after = await page.locator('html').getAttribute('data-theme')
   expect([before, after].sort()).toEqual(['dark-neutral', 'light-neutral'])
+})
+
+test('preflight and apply submit the visible configuration', async ({ page }) => {
+	let validateBody: typeof bundle | undefined
+	let applyBody: typeof bundle | undefined
+	page.on('request', request => {
+		const path = new URL(request.url()).pathname
+		if (path === '/api/v1/config/validate') validateBody = request.postDataJSON() as typeof bundle
+		if (path === '/api/v1/config/apply') applyBody = request.postDataJSON() as typeof bundle
+	})
+	await mockAPI(page)
+	await page.goto('/')
+	await page.getByRole('button', { name: 'DNS 与网络', exact: true }).filter({ visible: true }).click()
+	await page.getByLabel('Gateway IP').fill('10.0.0.2')
+	await page.getByRole('button', { name: '预检' }).click()
+	await expect(page.getByText('预检通过，共 10023 条规则')).toBeVisible()
+	expect(validateBody?.config.network.gateway_ip).toBe('10.0.0.2')
+	await page.getByRole('button', { name: '应用' }).click()
+	await expect(page.getByText('配置没有变化')).toBeVisible()
+	expect(applyBody?.config.network.gateway_ip).toBe('10.0.0.2')
 })

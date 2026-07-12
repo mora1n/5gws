@@ -29,6 +29,51 @@ func TestSelectExitUsesGatewayRuleBeforeFallback(t *testing.T) {
 	}
 }
 
+func TestRunCompiledReleasesTCPPortOnCancel(t *testing.T) {
+	probe, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := probe.Addr().(*net.TCPAddr).Port
+	probe.Close()
+	cfg := testConfig()
+	cfg.Network.TCPRedirectPort = port
+	cfg.Network.QUICPolicy = "reject"
+	compiled, err := rules.Compile(rules.Normalized{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- RunCompiled(ctx, cfg, rules.Normalized{}, compiled) }()
+	waitForTCP(t, port)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("gateway did not stop promptly")
+	}
+	rebound, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("rebind port %d: %v", port, err)
+	}
+	rebound.Close()
+}
+
+func waitForTCP(t *testing.T, port int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 20*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("port %d did not become ready", port)
+}
+
 func TestSelectExitFallsBackWhenOnlyDNSPoolRuleMatches(t *testing.T) {
 	cfg := testConfig()
 	norm := rules.Normalized{Rules: []rules.Rule{

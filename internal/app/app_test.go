@@ -13,10 +13,13 @@ func TestHelpAndUnknownCommand(t *testing.T) {
 	if err := Run(nil, strings.NewReader(""), &out, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"install", "reset-admin", "status", "rollback", "export"} {
+	for _, want := range []string{"install", "reset-admin", "status", "export"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("help missing %q", want)
 		}
+	}
+	if strings.Contains(out.String(), "rollback") {
+		t.Fatal("help still exposes removed revision rollback")
 	}
 	if err := Run([]string{"bot"}, strings.NewReader(""), &out, &out); err == nil {
 		t.Fatal("removed bot command was accepted")

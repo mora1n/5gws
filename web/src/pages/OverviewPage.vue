@@ -34,7 +34,7 @@ import type { Dashboard, Diagnostics, Metric } from '@/types'
 const props = defineProps<{ dashboard: Dashboard | null; metrics: Metric[]; diagnostics: Diagnostics | null; runtimeBusy: boolean }>()
 defineEmits<{ refresh: []; 'refresh-runtime': [] }>()
 
-const stats = computed(() => [{ label: '版本', value: props.dashboard?.version || '-' }, { label: '活动版本', value: props.dashboard?.active_revision ?? '-' }, { label: '规则', value: props.dashboard?.rules ?? '-' }])
+const stats = computed(() => [{ label: '版本', value: props.dashboard?.version || '-' }, { label: '受管进程', value: props.dashboard?.processes.length ?? '-' }, { label: '规则', value: props.dashboard?.rules ?? '-' }])
 const latest = computed(() => props.metrics.at(-1))
 const rates = computed(() => props.metrics.slice(1).map((metric, index) => {
   const previous = props.metrics[index]

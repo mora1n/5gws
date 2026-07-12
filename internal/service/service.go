@@ -21,6 +21,7 @@ type Service struct {
 }
 
 type Runtime interface {
+	Preflight(context.Context, store.Bundle) error
 	Prepare(context.Context, int64, store.Bundle) (string, error)
 	Apply(context.Context, string, store.Bundle) error
 }
@@ -31,6 +32,13 @@ type Validation struct {
 	Warnings   []rules.Warning `json:"warnings"`
 	Root       string          `json:"-"`
 	Bundle     store.Bundle    `json:"-"`
+}
+
+type ApplyResult struct {
+	Changed    bool            `json:"changed"`
+	RevisionID int64           `json:"revision_id"`
+	RuleCount  int             `json:"rule_count"`
+	Warnings   []rules.Warning `json:"warnings"`
 }
 
 func New(state *store.Store, supervisor Runtime, active, draft store.Revision) *Service {
@@ -65,64 +73,130 @@ func (s *Service) ValidateDraft(ctx context.Context) (Validation, error) {
 	if err != nil {
 		return Validation{}, err
 	}
-	norm, err := (rules.Resolver{Cache: s.store}).Normalize(ctx, draft.Bundle.Rules)
-	if err != nil {
-		return Validation{}, err
-	}
-	if _, err := rules.Compile(norm); err != nil {
-		return Validation{}, err
-	}
-	draft.Bundle.ResolvedRules = norm.Rules
-	prepared, err := s.store.SaveDraft(ctx, draft.Bundle)
-	if err != nil {
-		return Validation{}, err
-	}
-	s.setDraft(prepared)
-	root, err := s.supervisor.Prepare(ctx, prepared.ID, prepared.Bundle)
-	if err != nil {
-		_ = s.store.Fail(ctx, prepared.ID, err)
-		prepared.Status = "failed"
-		prepared.Error = err.Error()
-		s.setDraft(prepared)
-		return Validation{}, err
-	}
-	return Validation{RevisionID: prepared.ID, RuleCount: len(norm.Rules), Warnings: norm.Warnings, Root: root, Bundle: prepared.Bundle}, nil
+	validation, err := s.ValidateBundle(ctx, draft.Bundle)
+	validation.RevisionID = draft.ID
+	return validation, err
 }
 
-func (s *Service) Apply(ctx context.Context) (store.Revision, error) {
+func (s *Service) ValidateBundle(ctx context.Context, bundle store.Bundle) (Validation, error) {
+	resolved, warnings, err := s.resolveBundle(ctx, bundle)
+	if err != nil {
+		return Validation{}, err
+	}
+	if err := s.supervisor.Preflight(ctx, resolved); err != nil {
+		return Validation{}, err
+	}
+	return Validation{RuleCount: len(resolved.ResolvedRules), Warnings: warnings, Bundle: resolved}, nil
+}
+
+func (s *Service) resolveBundle(ctx context.Context, bundle store.Bundle) (store.Bundle, []rules.Warning, error) {
+	bundle.Config.ApplyDefaults()
+	if err := bundle.Config.Validate(); err != nil {
+		return store.Bundle{}, nil, err
+	}
+	norm, err := (rules.Resolver{Cache: s.store}).Normalize(ctx, bundle.Rules)
+	if err != nil {
+		return store.Bundle{}, nil, err
+	}
+	if _, err := rules.Compile(norm); err != nil {
+		return store.Bundle{}, nil, err
+	}
+	bundle.ResolvedRules = norm.Rules
+	return bundle, norm.Warnings, nil
+}
+
+func (s *Service) ApplyBundle(ctx context.Context, bundle store.Bundle) (ApplyResult, error) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	active, err := s.store.Active(ctx)
 	if err != nil {
-		return store.Revision{}, err
+		return ApplyResult{}, err
 	}
-	validated, err := s.ValidateDraft(ctx)
+	if active.Bundle.SameInput(bundle) {
+		reset, err := s.store.ResetDraftToActive(ctx)
+		if err != nil {
+			return ApplyResult{}, err
+		}
+		if err := s.store.PruneRevisions(ctx); err != nil {
+			return ApplyResult{}, err
+		}
+		if err := PruneRevisionDirs(active.Bundle.Config.System.StateDir, active.ID); err != nil {
+			return ApplyResult{}, err
+		}
+		s.setActiveAndDraft(reset)
+		return ApplyResult{Changed: false, RevisionID: active.ID, RuleCount: len(active.Bundle.ResolvedRules)}, nil
+	}
+	resolved, warnings, err := s.resolveBundle(ctx, bundle)
 	if err != nil {
-		return store.Revision{}, err
+		return ApplyResult{}, err
 	}
-	if err := s.supervisor.Apply(ctx, validated.Root, validated.Bundle); err != nil {
-		_ = s.store.Fail(ctx, validated.RevisionID, err)
-		return store.Revision{}, err
+	candidate, err := s.store.SaveDraft(ctx, resolved)
+	if err != nil {
+		return ApplyResult{}, err
 	}
-	activated, err := s.store.Activate(ctx, validated.RevisionID)
+	s.setDraft(candidate)
+	root, err := s.supervisor.Prepare(ctx, candidate.ID, candidate.Bundle)
+	if err == nil {
+		err = s.supervisor.Apply(ctx, root, candidate.Bundle)
+	}
+	if err != nil {
+		failErr := s.store.Fail(ctx, candidate.ID, err)
+		restoreErr := s.restoreActiveDraft(ctx)
+		return ApplyResult{}, errors.Join(
+			err,
+			wrapError("mark candidate failed", failErr),
+			wrapError("restore active revision", restoreErr),
+		)
+	}
+	activated, err := s.store.Activate(ctx, candidate.ID)
 	if err != nil {
 		oldRoot := filepath.Join(active.Bundle.Config.System.StateDir, "revisions", fmt.Sprint(active.ID))
-		if rollbackErr := s.supervisor.Apply(ctx, oldRoot, active.Bundle); rollbackErr != nil {
-			return store.Revision{}, errors.Join(err, fmt.Errorf("runtime rollback: %w", rollbackErr))
-		}
-		return store.Revision{}, err
+		rollbackErr := s.supervisor.Apply(ctx, oldRoot, active.Bundle)
+		restoreErr := s.restoreActiveDraft(ctx)
+		return ApplyResult{}, errors.Join(
+			err,
+			wrapError("runtime rollback", rollbackErr),
+			wrapError("restore active revision", restoreErr),
+		)
 	}
 	s.setActiveAndDraft(activated)
-	return activated, nil
+	if err := s.store.PruneRevisions(ctx); err != nil {
+		return ApplyResult{}, err
+	}
+	if err := PruneRevisionDirs(activated.Bundle.Config.System.StateDir, activated.ID); err != nil {
+		return ApplyResult{}, err
+	}
+	return ApplyResult{Changed: true, RevisionID: activated.ID, RuleCount: len(activated.Bundle.ResolvedRules), Warnings: warnings}, nil
 }
 
-func (s *Service) Rollback(ctx context.Context, revisionID int64) (store.Revision, error) {
-	draft, err := s.store.DraftFromRevision(ctx, revisionID)
+func wrapError(operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func (s *Service) restoreActiveDraft(ctx context.Context) error {
+	active, err := s.store.ResetDraftToActive(ctx)
+	if err != nil {
+		return err
+	}
+	s.setActiveAndDraft(active)
+	if err := s.store.PruneRevisions(ctx); err != nil {
+		return err
+	}
+	return PruneRevisionDirs(active.Bundle.Config.System.StateDir, active.ID)
+}
+
+func (s *Service) Apply(ctx context.Context) (store.Revision, error) {
+	draft, err := s.store.Draft(ctx)
 	if err != nil {
 		return store.Revision{}, err
 	}
-	s.setDraft(draft)
-	return s.Apply(ctx)
+	if _, err := s.ApplyBundle(ctx, draft.Bundle); err != nil {
+		return store.Revision{}, err
+	}
+	return s.Active(ctx)
 }
 
 func (s *Service) setDraft(revision store.Revision) {

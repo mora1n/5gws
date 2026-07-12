@@ -1,4 +1,4 @@
-import type { ActiveRules, Bundle, Dashboard, Diagnostics, IOSProfile, Metric, Revision } from './types'
+import type { ActiveRules, Bundle, Dashboard, Diagnostics, IOSProfile, Metric } from './types'
 
 export class APIError extends Error {
   constructor(message: string, readonly status: number) {
@@ -9,7 +9,7 @@ export class APIError extends Error {
 
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
-  if (init.body && !(init.body instanceof FormData)) headers.set('Content-Type', 'application/json')
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
   const response = await fetch(path, { ...init, headers, credentials: 'same-origin' })
   if (!response.ok) {
     const body = await response.json().catch(() => ({ error: response.statusText }))
@@ -27,12 +27,11 @@ export const api = {
   dashboard: () => request<Dashboard>('/api/v1/dashboard'),
 	metrics: () => request<{ metrics: Metric[] }>('/api/v1/metrics'),
 	runDiagnostics: (scope = 'all') => request<Diagnostics>(`/api/v1/diagnostics/run?scope=${encodeURIComponent(scope)}`, { method: 'POST' }),
-	active: () => request<Revision>('/api/v1/active'),
 	activeRules: () => request<ActiveRules>('/api/v1/active/rules'),
-  draft: () => request<Revision>('/api/v1/draft'),
-  saveDraft: (bundle: Bundle) => request<Revision>('/api/v1/draft', { method: 'PUT', body: JSON.stringify(bundle) }),
-  validate: () => request<{ revision_id: number; rule_count: number; warnings: unknown[] }>('/api/v1/draft/validate', { method: 'POST' }),
-  apply: () => request<Revision>('/api/v1/apply', { method: 'POST' }),
+  config: () => request<Bundle>('/api/v1/config'),
+  validateConfig: (bundle: Bundle) => request<{ rule_count: number; warnings: unknown[] }>('/api/v1/config/validate', { method: 'POST', body: JSON.stringify(bundle) }),
+  applyConfig: (bundle: Bundle) => request<{ changed: boolean; revision_id: number; rule_count: number; warnings: unknown[] }>('/api/v1/config/apply', { method: 'POST', body: JSON.stringify(bundle) }),
+  importConfig: (content: string) => request<Bundle>('/api/v1/config/import', { method: 'POST', body: content, headers: { 'Content-Type': 'application/toml' } }),
   logs: () => request<{ logs: string }>('/api/v1/logs?lines=500'),
   diagnostics: () => request<{ processes: { name: string; pid: number }[]; logs: string }>('/api/v1/diagnostics'),
 	ios: () => request<IOSProfile>('/api/v1/ios/profile'),

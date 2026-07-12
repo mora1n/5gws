@@ -37,6 +37,7 @@ type processGroup struct {
 	bundle   store.Bundle
 	stopped  chan struct{}
 	stopOnce sync.Once
+	wait     sync.WaitGroup
 }
 
 type ProcessStatus struct {
@@ -45,6 +46,9 @@ type ProcessStatus struct {
 }
 
 const readinessTimeout = 15 * time.Second
+const shutdownTimeout = 5 * time.Second
+
+var errShutdownTimeout = errors.New("process group shutdown timed out")
 
 func (s *Supervisor) Status() []ProcessStatus {
 	s.mu.Lock()
@@ -71,17 +75,33 @@ func (s *Supervisor) Fatal() <-chan error { return s.fatal }
 func (s *Supervisor) Logs() *LogBuffer { return s.logs }
 
 func (s *Supervisor) Prepare(ctx context.Context, revisionID int64, bundle store.Bundle) (string, error) {
-	norm := bundle.Normalized()
 	root := filepath.Join(s.stateDir, "revisions", fmt.Sprint(revisionID))
+	if err := s.prepareAt(ctx, root, bundle); err != nil {
+		return "", err
+	}
+	return root, nil
+}
+
+func (s *Supervisor) Preflight(ctx context.Context, bundle store.Bundle) error {
+	root, err := os.MkdirTemp(s.stateDir, "preflight-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(root)
+	return s.prepareAt(ctx, root, bundle)
+}
+
+func (s *Supervisor) prepareAt(ctx context.Context, root string, bundle store.Bundle) error {
+	norm := bundle.Normalized()
 	files, err := render.GenerateAt(bundle.Config, norm, root)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if err := os.RemoveAll(root); err != nil {
-		return "", err
+		return err
 	}
 	if err := render.WriteAll(root, files); err != nil {
-		return "", err
+		return err
 	}
 	checks := [][]string{
 		{bundle.Config.DNS.Binary, "test", "-c", filepath.Join(root, "smartdns", "smartdns.conf")},
@@ -90,10 +110,10 @@ func (s *Supervisor) Prepare(ctx context.Context, revisionID int64, bundle store
 	}
 	for _, check := range checks {
 		if err := runCheck(ctx, s.logs, check[0], check[1:]...); err != nil {
-			return "", err
+			return err
 		}
 	}
-	return root, nil
+	return nil
 }
 
 func (s *Supervisor) Start(ctx context.Context, root string, bundle store.Bundle) error {
@@ -123,7 +143,10 @@ func (s *Supervisor) Apply(ctx context.Context, root string, bundle store.Bundle
 	defer s.mu.Unlock()
 	previous := s.current
 	if previous != nil {
-		stopGroup(previous)
+		if err := stopGroup(previous); err != nil {
+			s.reportFatal(err)
+			return err
+		}
 	}
 	if err := runCheck(ctx, s.logs, "nft", "-f", filepath.Join(root, "nftables", "5gws.nft")); err != nil {
 		if previous != nil {
@@ -133,6 +156,10 @@ func (s *Supervisor) Apply(ctx context.Context, root string, bundle store.Bundle
 	}
 	group, err := s.startGroup(ctx, root, bundle)
 	if err != nil {
+		if errors.Is(err, errShutdownTimeout) {
+			s.reportFatal(err)
+			return err
+		}
 		if previous != nil {
 			s.restoreLocked(ctx, previous)
 		}
@@ -147,7 +174,9 @@ func (s *Supervisor) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current != nil {
-		stopGroup(s.current)
+		if err := stopGroup(s.current); err != nil {
+			s.reportFatal(err)
+		}
 		s.current = nil
 	}
 }
@@ -176,12 +205,16 @@ func (s *Supervisor) startGroup(parent context.Context, root string, bundle stor
 		cmd.Stderr = io.MultiWriter(os.Stderr, s.logs)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		if err := cmd.Start(); err != nil {
-			cancel()
-			stopCommands(group.cmds)
-			return nil, fmt.Errorf("start %s: %w", spec[0], err)
+			startErr := fmt.Errorf("start %s: %w", spec[0], err)
+			if stopErr := stopGroup(group); stopErr != nil {
+				return nil, errors.Join(startErr, stopErr)
+			}
+			return nil, startErr
 		}
 		group.cmds = append(group.cmds, cmd)
+		group.wait.Add(1)
 		go func(name string, cmd *exec.Cmd) {
+			defer group.wait.Done()
 			if err := cmd.Wait(); ctx.Err() == nil {
 				if err == nil {
 					err = errors.New("process exited successfully but was expected to remain running")
@@ -193,7 +226,9 @@ func (s *Supervisor) startGroup(parent context.Context, root string, bundle stor
 			}
 		}(spec[0], cmd)
 	}
+	group.wait.Add(1)
 	go func() {
+		defer group.wait.Done()
 		log.SetOutput(io.MultiWriter(os.Stderr, s.logs))
 		compiled, err := rules.Compile(bundle.Normalized())
 		if err == nil {
@@ -212,12 +247,16 @@ func (s *Supervisor) startGroup(parent context.Context, root string, bundle stor
 	time.Sleep(250 * time.Millisecond)
 	select {
 	case err := <-group.done:
-		stopGroup(group)
+		if stopErr := stopGroup(group); stopErr != nil {
+			return nil, errors.Join(err, stopErr)
+		}
 		return nil, err
 	default:
 		for _, address := range readinessAddresses(bundle) {
 			if err := waitTCP(ctx, address, readinessTimeout); err != nil {
-				stopGroup(group)
+				if stopErr := stopGroup(group); stopErr != nil {
+					return nil, errors.Join(err, stopErr)
+				}
 				return nil, err
 			}
 		}
@@ -243,6 +282,7 @@ func readinessAddresses(bundle store.Bundle) []string {
 		loopbackAddress(bundle.Config.DNS.ListenTCP),
 		net.JoinHostPort("127.0.0.1", fmt.Sprint(bundle.Config.Network.HTTPRedirectPort)),
 		net.JoinHostPort("127.0.0.1", fmt.Sprint(bundle.Config.Network.HTTPSRedirectPort)),
+		net.JoinHostPort("127.0.0.1", fmt.Sprint(bundle.Config.Network.TCPRedirectPort)),
 	}
 	for _, exit := range bundle.Config.Exits {
 		if exit.Type == "shadowsocks-rust" {
@@ -299,10 +339,21 @@ func (s *Supervisor) reportFatal(err error) {
 	}
 }
 
-func stopGroup(group *processGroup) {
+func stopGroup(group *processGroup) error {
 	group.stopOnce.Do(func() { close(group.stopped) })
 	group.cancel()
 	stopCommands(group.cmds)
+	done := make(chan struct{})
+	go func() {
+		group.wait.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-time.After(shutdownTimeout):
+		return fmt.Errorf("%w after %s", errShutdownTimeout, shutdownTimeout)
+	}
 }
 
 func stopCommands(cmds []*exec.Cmd) {

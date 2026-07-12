@@ -28,13 +28,50 @@ func (s *Server) logsStream(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	updates, unsubscribe := s.Supervisor.Logs().Subscribe()
+	defer unsubscribe()
+	writeLogs := func() error {
+		logs, sequence := s.Supervisor.Logs().Snapshot(500)
+		body, _ := json.Marshal(map[string]string{"logs": logs})
+		if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", sequence, body); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	if err := writeLogs(); err != nil {
+		return
+	}
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+	var batch *time.Timer
+	var batchC <-chan time.Time
+	defer func() {
+		if batch != nil {
+			batch.Stop()
+		}
+	}()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-s.Supervisor.Logs().Notify():
-			body, _ := json.Marshal(map[string]string{"logs": s.Supervisor.Logs().Tail(100)})
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", body); err != nil {
+		case _, ok := <-updates:
+			if !ok {
+				return
+			}
+			if batch == nil {
+				batch = time.NewTimer(250 * time.Millisecond)
+				batchC = batch.C
+			}
+		case <-batchC:
+			if err := writeLogs(); err != nil {
+				return
+			}
+			batch = nil
+			batchC = nil
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": heartbeat\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
