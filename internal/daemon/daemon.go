@@ -66,7 +66,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		return err
 	}
 	logs := engine.NewLogBuffer(2 << 20)
-	supervisor := engine.NewSupervisor(active.Bundle.Config.System.StateDir, logs)
+	supervisor := engine.NewSupervisor(ctx, active.Bundle.Config.System.StateDir, logs)
 	root, err := supervisor.Prepare(ctx, active.ID, active.Bundle)
 	if err != nil {
 		return err
@@ -75,7 +75,9 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		return err
 	}
 	defer supervisor.Stop()
-	application := service.New(state, supervisor, active, draft)
+	application := service.New(service.Options{
+		Context: ctx, Store: state, Runtime: supervisor, Active: active, Draft: draft,
+	})
 	go collectMetrics(ctx, application, supervisor)
 	server := &api.Server{
 		Service: application, Auth: auth.New(state.DB(), 24*time.Hour), Supervisor: supervisor,

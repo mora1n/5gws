@@ -7,9 +7,9 @@
     <main class="min-w-0 flex-1 overflow-y-auto pb-16 lg:pb-0">
       <header class="sticky top-0 z-20 flex min-h-16 flex-wrap items-center justify-between gap-2 border-b border-base-300 bg-base-100/95 px-4 py-2 backdrop-blur sm:px-6">
         <div class="min-w-0 truncate font-medium">{{ pageTitle }}</div>
-        <div class="flex items-center gap-2"><button class="btn btn-ghost btn-square btn-sm" :title="themeTitle" @click="toggleTheme"><Moon v-if="theme === 'light-neutral'" class="size-4" /><Sun v-else class="size-4" /></button><template v-if="editablePage"><button class="btn btn-outline btn-sm" :disabled="busy || !bundle" @click="validate"><ShieldCheck class="size-4" />预检</button><button class="btn btn-primary btn-sm" :disabled="busy || !bundle" @click="apply"><Play class="size-4" />应用</button></template></div>
+        <div class="flex items-center gap-2"><button class="btn btn-ghost btn-square btn-sm" :title="themeTitle" @click="toggleTheme"><Moon v-if="theme === 'light-neutral'" class="size-4" /><Sun v-else class="size-4" /></button><template v-if="editablePage"><button class="btn btn-outline btn-sm" :disabled="busy || !bundle" @click="validate"><ShieldCheck class="size-4" />预检</button><button class="btn btn-primary btn-sm min-w-20" :disabled="busy || !bundle" @click="apply"><LoaderCircle v-if="applying" class="size-4 animate-spin" /><Play v-else class="size-4" />{{ applying ? '应用中' : '应用' }}</button></template></div>
       </header>
-      <div v-if="message" class="mx-4 mt-4 flex items-center gap-2 border px-3 py-2 text-sm sm:mx-6" :class="error ? 'border-error/40 bg-error/10 text-error' : 'border-success/40 bg-success/10 text-success'"><CircleAlert v-if="error" class="size-4 shrink-0" /><CircleCheck v-else class="size-4 shrink-0" /><span class="break-all">{{ message }}</span><button class="btn btn-ghost btn-square btn-xs ml-auto" title="关闭" @click="message = ''"><X class="size-4" /></button></div>
+      <div v-if="message" class="mx-4 mt-4 flex items-center gap-2 border px-3 py-2 text-sm sm:mx-6" :class="error ? 'border-error/40 bg-error/10 text-error' : 'border-success/40 bg-success/10 text-success'"><LoaderCircle v-if="applying" class="size-4 shrink-0 animate-spin" /><CircleAlert v-else-if="error" class="size-4 shrink-0" /><CircleCheck v-else class="size-4 shrink-0" /><span class="break-all">{{ message }}</span><button class="btn btn-ghost btn-square btn-xs ml-auto" title="关闭" @click="message = ''"><X class="size-4" /></button></div>
       <OverviewPage v-if="page === 'overview'" :dashboard="dashboard" :metrics="metrics" :diagnostics="diagnostics" :runtime-busy="runtimeBusy" @refresh="refresh" @refresh-runtime="refreshRuntime" />
       <NetworkPage v-else-if="page === 'network' && bundle" v-model:bundle="bundle" :diagnostics="diagnostics" :diagnostics-busy="diagnosticsBusy" @refresh-diagnostics="runDiagnostics('network')" />
       <RulesPage v-else-if="page === 'rules' && bundle" v-model:bundle="bundle" :active-revision="dashboard?.active_revision || 0" @error="show($event, true)" />
@@ -23,14 +23,15 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { CircleAlert, CircleCheck, LoaderCircle, Moon, Play, ShieldCheck, Sun, X } from '@lucide/vue'
-import { APIError, api } from '@/api'; import type { Bundle, Dashboard, Diagnostics, Metric } from '@/types'
+import { APIError, api } from '@/api'; import type { ApplyOperation, Bundle, Dashboard, Diagnostics, Metric } from '@/types'
 import AuthView from '@/components/AuthView.vue'; import AppNav from '@/components/AppNav.vue'
 import OverviewPage from '@/pages/OverviewPage.vue'; import NetworkPage from '@/pages/NetworkPage.vue'; import RulesPage from '@/pages/RulesPage.vue'; import ExitsPage from '@/pages/ExitsPage.vue'; import LogsPage from '@/pages/LogsPage.vue'; import SettingsPage from '@/pages/SettingsPage.vue'
 
-const loading=ref(true), authenticated=ref(false), needsSetup=ref(false), busy=ref(false), error=ref(false)
+const loading=ref(true), authenticated=ref(false), needsSetup=ref(false), busy=ref(false), applying=ref(false), error=ref(false)
 const page=ref('overview'), message=ref(''), startupError=ref(''), dashboard=ref<Dashboard|null>(null), bundle=ref<Bundle|null>(null)
 const metrics=ref<Metric[]>([]), diagnostics=ref<Diagnostics|null>(null), diagnosticsBusy=ref(false), metricsBusy=ref(false)
 let metricsTimer: number | undefined
+let disposed=false
 const theme=ref<'light-neutral'|'dark-neutral'>(initialTheme())
 const titles:Record<string,string>={overview:'概览',network:'DNS 与网络',rules:'规则',exits:'出口',logs:'日志',settings:'设置'}
 const pageTitle=computed(()=>titles[page.value]||'5gws')
@@ -41,7 +42,43 @@ async function start(){ authenticated.value=true; await reload(); void refreshRu
 async function reload(){ [dashboard.value,bundle.value]=await Promise.all([api.dashboard(),api.config()]) }
 async function refresh(){ try{ await reload() }catch(cause){ show(cause,true) } }
 async function validate(){ if(!bundle.value)return; await action(async()=>{ const result=await api.validateConfig(bundle.value!); return `预检通过，共 ${result.rule_count} 条规则` }) }
-async function apply(){ if(!bundle.value)return; await action(async()=>{ const result=await api.applyConfig(bundle.value!); await reload(); return result.changed ? `配置已应用，共 ${result.rule_count} 条规则` : '配置没有变化' }) }
+async function apply(){
+  if(!bundle.value || busy.value)return
+  busy.value=true; applying.value=true
+  const operationID=crypto.randomUUID(), submitted={ value:false }
+  show('正在提交配置',false)
+  try {
+    const result=await waitForApply(operationID,bundle.value,submitted)
+    await reloadAfterApply()
+    show(result.changed ? `配置已应用，共 ${result.rule_count} 条规则` : '配置没有变化',false)
+  } catch(cause) { show(cause,true) }
+  finally { busy.value=false; applying.value=false }
+}
+async function waitForApply(operationID:string,value:Bundle,submitted:{ value:boolean }):Promise<ApplyOperation>{
+  while(!disposed){
+    try {
+      const operation=submitted.value ? await api.applyStatus(operationID) : await api.applyConfig(value,operationID)
+      submitted.value=true
+      if(operation.status==='succeeded')return operation
+      if(operation.status==='failed')throw new Error(operation.error || '配置应用失败')
+      show(operation.status==='queued' ? '配置已提交，等待应用' : '正在应用配置，数据面会短暂重连',false)
+    } catch(cause) {
+      if(!retryableApplyError(cause))throw cause
+      if(cause instanceof APIError && cause.status===404)submitted.value=false
+      show('数据面正在切换，正在重新连接',false)
+    }
+    await sleep(1000)
+  }
+  throw new Error('配置应用页面已关闭')
+}
+async function reloadAfterApply(){
+  while(!disposed){
+    try { await reload(); return }
+    catch(cause) { if(!retryableApplyError(cause))throw cause; show('配置已生效，正在重新连接面板',false); await sleep(1000) }
+  }
+}
+function retryableApplyError(cause:unknown){ return cause instanceof TypeError || (cause instanceof APIError && (cause.status===404 || cause.status>=500)) }
+function sleep(milliseconds:number){ return new Promise(resolve=>window.setTimeout(resolve,milliseconds)) }
 function imported(value: Bundle){ bundle.value=value; show('配置已导入，请预检后应用',false) }
 async function action(fn:()=>Promise<string>){ busy.value=true; try{ show(await fn(),false) }catch(cause){ show(cause,true) }finally{ busy.value=false } }
 async function loadMetrics(){ if(metricsBusy.value)return; metricsBusy.value=true; try{ metrics.value=(await api.metrics()).metrics }catch(cause){ show(cause,true) }finally{ metricsBusy.value=false } }
@@ -76,5 +113,5 @@ async function initialize(){
   finally { loading.value=false }
 }
 onMounted(()=>{ applyTheme(); initialize() })
-onUnmounted(()=>{ if(metricsTimer)window.clearInterval(metricsTimer) })
+onUnmounted(()=>{ disposed=true; if(metricsTimer)window.clearInterval(metricsTimer) })
 </script>

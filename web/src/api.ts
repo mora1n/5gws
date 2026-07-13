@@ -1,4 +1,4 @@
-import type { ActiveRules, Bundle, Dashboard, Diagnostics, IOSProfile, Metric } from './types'
+import type { ActiveRules, ApplyOperation, Bundle, Dashboard, Diagnostics, IOSProfile, Metric } from './types'
 
 export class APIError extends Error {
   constructor(message: string, readonly status: number) {
@@ -30,7 +30,8 @@ export const api = {
 	activeRules: () => request<ActiveRules>('/api/v1/active/rules'),
   config: () => request<Bundle>('/api/v1/config'),
   validateConfig: (bundle: Bundle) => request<{ rule_count: number; warnings: unknown[] }>('/api/v1/config/validate', { method: 'POST', body: JSON.stringify(bundle) }),
-  applyConfig: (bundle: Bundle) => request<{ changed: boolean; revision_id: number; rule_count: number; warnings: unknown[] }>('/api/v1/config/apply', { method: 'POST', body: JSON.stringify(bundle) }),
+  applyConfig: (bundle: Bundle, operationID: string) => request<ApplyOperation>('/api/v1/config/apply', { method: 'POST', body: JSON.stringify(bundle), headers: { 'X-5gws-Operation-ID': operationID } }),
+  applyStatus: (operationID: string) => request<ApplyOperation>(`/api/v1/config/apply/${encodeURIComponent(operationID)}`),
   importConfig: (content: string) => request<Bundle>('/api/v1/config/import', { method: 'POST', body: content, headers: { 'Content-Type': 'application/toml' } }),
   logs: () => request<{ logs: string }>('/api/v1/logs?lines=500'),
   diagnostics: () => request<{ processes: { name: string; pid: number }[]; logs: string }>('/api/v1/diagnostics'),

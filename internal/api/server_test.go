@@ -148,9 +148,15 @@ func TestWebConfigValidateAndNoChangeApplyDoNotCreateRevisions(t *testing.T) {
 	if validate.Code != http.StatusOK {
 		t.Fatalf("validate=%d %s", validate.Code, validate.Body.String())
 	}
-	apply := serve(router, request(t, http.MethodPost, "/api/v1/config/apply", active.Bundle))
-	if apply.Code != http.StatusOK || !strings.Contains(apply.Body.String(), `"changed":false`) {
+	applyRequest := request(t, http.MethodPost, "/api/v1/config/apply", active.Bundle)
+	applyRequest.Header.Set(applyOperationHeader, "3e2f3ef7-9ac5-4ca8-8a19-4ca54c51c10c")
+	apply := serve(router, applyRequest)
+	if apply.Code != http.StatusAccepted {
 		t.Fatalf("apply=%d %s", apply.Code, apply.Body.String())
+	}
+	operation := waitApplyOperation(t, router, "3e2f3ef7-9ac5-4ca8-8a19-4ca54c51c10c")
+	if operation.Status != "succeeded" || operation.Changed {
+		t.Fatalf("operation=%+v", operation)
 	}
 	var count int
 	if err := server.Service.Store().DB().QueryRow("SELECT COUNT(*) FROM revisions").Scan(&count); err != nil {
@@ -163,6 +169,76 @@ func TestWebConfigValidateAndNoChangeApplyDoNotCreateRevisions(t *testing.T) {
 	if strings.Contains(configResponse.Body.String(), "resolved_rules") {
 		t.Fatalf("config leaked resolved rules: %s", configResponse.Body.String())
 	}
+}
+
+func TestApplyOperationHTTPValidationAndConflict(t *testing.T) {
+	server, closeState := testServer(t)
+	defer closeState()
+	applier := &blockingApplier{started: make(chan struct{}), release: make(chan struct{})}
+	server.applyOnce.Do(func() { server.applies = newApplyCoordinator(applier) })
+	router := server.Router(true)
+
+	missing := serve(router, request(t, http.MethodPost, "/api/v1/config/apply", serviceBundleForAPI()))
+	if missing.Code != http.StatusBadRequest {
+		t.Fatalf("missing ID=%d %s", missing.Code, missing.Body.String())
+	}
+	id := "3e2f3ef7-9ac5-4ca8-8a19-4ca54c51c10c"
+	begin := request(t, http.MethodPost, "/api/v1/config/apply", serviceBundleForAPI())
+	begin.Header.Set(applyOperationHeader, id)
+	if response := serve(router, begin); response.Code != http.StatusAccepted {
+		t.Fatalf("begin=%d %s", response.Code, response.Body.String())
+	}
+	<-applier.started
+	retry := request(t, http.MethodPost, "/api/v1/config/apply", serviceBundleForAPI())
+	retry.Header.Set(applyOperationHeader, id)
+	if response := serve(router, retry); response.Code != http.StatusAccepted {
+		t.Fatalf("retry=%d %s", response.Code, response.Body.String())
+	}
+	conflict := request(t, http.MethodPost, "/api/v1/config/apply", serviceBundleForAPI())
+	conflict.Header.Set(applyOperationHeader, "d57f56b8-774a-4dd7-b34e-bd62338ac8e4")
+	if response := serve(router, conflict); response.Code != http.StatusConflict {
+		t.Fatalf("conflict=%d %s", response.Code, response.Body.String())
+	}
+	if response := serve(router, request(t, http.MethodGet, "/api/v1/config/apply/bad-id", nil)); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status=%d %s", response.Code, response.Body.String())
+	}
+	if response := serve(router, request(t, http.MethodGet, "/api/v1/config/apply/d57f56b8-774a-4dd7-b34e-bd62338ac8e4", nil)); response.Code != http.StatusNotFound {
+		t.Fatalf("unknown status=%d %s", response.Code, response.Body.String())
+	}
+	close(applier.release)
+	if operation := waitApplyOperation(t, router, id); operation.Status != "succeeded" {
+		t.Fatalf("operation=%+v", operation)
+	}
+}
+
+func serviceBundleForAPI() store.Bundle {
+	cfg := config.Config{
+		Network: config.NetworkConfig{GatewayIP: "10.0.0.1", InternalCIDR: "172.22.0.0/16", IngressIface: "eth0"},
+		DNS:     config.DNSConfig{DOTDomain: "dot.example.com"}, Exits: []config.ExitConfig{{Name: "direct", Type: "direct"}},
+	}
+	cfg.ApplyDefaults()
+	return store.Bundle{Config: cfg, Rules: rules.File{Rules: []rules.Rule{{Name: "test", Exit: "direct", DomainSuffix: []string{"example.com"}}}}}
+}
+
+func waitApplyOperation(t *testing.T, router http.Handler, id string) ApplyOperation {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		response := serve(router, request(t, http.MethodGet, "/api/v1/config/apply/"+id, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("apply status=%d %s", response.Code, response.Body.String())
+		}
+		var operation ApplyOperation
+		if err := json.Unmarshal(response.Body.Bytes(), &operation); err != nil {
+			t.Fatal(err)
+		}
+		if terminalApplyStatus(operation.Status) {
+			return operation
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("apply operation did not finish")
+	return ApplyOperation{}
 }
 
 func TestActiveRuleSummaryNormalizesOnlyLegacySingleImports(t *testing.T) {
@@ -292,8 +368,11 @@ func testServerIOS(t *testing.T, iosEnabled bool) (*Server, func()) {
 		t.Fatal(err)
 	}
 	logs := engine.NewLogBuffer(1024)
-	supervisor := engine.NewSupervisor(t.TempDir(), logs)
-	return &Server{Service: service.New(state, apiRuntime{}, active, active), Auth: auth.New(state.DB(), time.Hour), Supervisor: supervisor, Version: "test"}, func() { state.Close() }
+	supervisor := engine.NewSupervisor(context.Background(), t.TempDir(), logs)
+	application := service.New(service.Options{
+		Context: context.Background(), Store: state, Runtime: apiRuntime{}, Active: active, Draft: active,
+	})
+	return &Server{Service: application, Auth: auth.New(state.DB(), time.Hour), Supervisor: supervisor, Version: "test"}, func() { state.Close() }
 }
 
 func request(t *testing.T, method, path string, body any) *http.Request {

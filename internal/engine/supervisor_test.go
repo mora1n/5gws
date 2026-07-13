@@ -14,7 +14,7 @@ import (
 
 func TestWatchReportsUnexpectedExit(t *testing.T) {
 	group := testProcessGroup()
-	supervisor := NewSupervisor(t.TempDir(), NewLogBuffer(1024))
+	supervisor := NewSupervisor(context.Background(), t.TempDir(), NewLogBuffer(1024))
 	supervisor.current = group
 	go supervisor.watch(group)
 
@@ -55,7 +55,7 @@ func TestReadinessIncludesTCPGateway(t *testing.T) {
 
 func TestWatchIgnoresPlannedStop(t *testing.T) {
 	group := testProcessGroup()
-	supervisor := NewSupervisor(t.TempDir(), NewLogBuffer(1024))
+	supervisor := NewSupervisor(context.Background(), t.TempDir(), NewLogBuffer(1024))
 	supervisor.current = group
 	go supervisor.watch(group)
 	close(group.stopped)

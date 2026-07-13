@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/morain/5gws/internal/config"
 	"github.com/morain/5gws/internal/rules"
@@ -18,6 +19,7 @@ type testRuntime struct {
 	preflightCalls int
 	prepareCalls   int
 	applyCalls     int
+	applyContext   context.Context
 }
 
 func (r *testRuntime) Preflight(_ context.Context, _ store.Bundle) error {
@@ -52,9 +54,39 @@ func TestValidateBundleDoesNotPersistRevision(t *testing.T) {
 		t.Fatalf("revisions=%d preflight=%d prepare=%d", count, runtime.preflightCalls, runtime.prepareCalls)
 	}
 }
-func (r *testRuntime) Apply(_ context.Context, _ string, _ store.Bundle) error {
+func (r *testRuntime) Apply(ctx context.Context, _ string, _ store.Bundle) error {
 	r.applyCalls++
+	r.applyContext = ctx
 	return r.applyErr
+}
+
+func TestApplyUsesDaemonContext(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	active, err := state.Initialize(ctx, serviceBundle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := active.Bundle
+	bundle.Config.Logging.Level = "debug"
+	runtime := &testRuntime{}
+	app := New(Options{Context: ctx, Store: state, Runtime: runtime, Active: active, Draft: active})
+	if _, err := app.ApplyBundle(bundle); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.applyContext == nil || runtime.applyContext.Err() != nil {
+		t.Fatalf("runtime context=%v", runtime.applyContext)
+	}
+	cancel()
+	select {
+	case <-runtime.applyContext.Done():
+	case <-time.After(time.Second):
+		t.Fatal("runtime context did not follow daemon cancellation")
+	}
 }
 
 func TestApplyBundleNoChangeDoesNotTouchRuntime(t *testing.T) {
@@ -71,7 +103,7 @@ func TestApplyBundleNoChangeDoesNotTouchRuntime(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime := &testRuntime{}
-	result, err := newTestService(t, state, runtime).ApplyBundle(context.Background(), active.Bundle)
+	result, err := newTestService(t, state, runtime).ApplyBundle(active.Bundle)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +164,7 @@ func TestServiceReadsPersistedSnapshotsWithoutDatabaseQueries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := New(state, &testRuntime{}, active, active)
+	app := New(Options{Context: context.Background(), Store: state, Runtime: &testRuntime{}, Active: active, Draft: active})
 	if err := state.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +188,7 @@ func newTestService(t *testing.T, state *store.Store, runtime Runtime) *Service 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(state, runtime, active, draft)
+	return New(Options{Context: context.Background(), Store: state, Runtime: runtime, Active: active, Draft: draft})
 }
 
 func serviceBundle() store.Bundle {

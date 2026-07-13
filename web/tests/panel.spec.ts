@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page, type Route } from '@playwright/test'
 
 const bundle = {
   config: {
@@ -39,10 +39,11 @@ const pages = [
 	['日志', '日志', '日志'], ['设置', '设置', '设置'],
 ] as const
 
-async function mockAPI(page: Page) {
+async function mockAPI(page: Page, applyHandler?: (route: Route) => Promise<unknown>) {
   await page.route('**/api/v1/**', async route => {
-    const path = new URL(route.request().url()).pathname
-    const json = (value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) })
+		const path = new URL(route.request().url()).pathname
+		const json = (value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) })
+		if (path.startsWith('/api/v1/config/apply') && applyHandler) return applyHandler(route)
     if (path === '/api/v1/bootstrap') return json({ needs_setup: false })
     if (path === '/api/v1/me') return json({ username: 'admin' })
     if (path === '/api/v1/dashboard') return json({ version: '0.2.0', active_revision: 7, rules: 10023, processes: [{ name: 'smartdns', pid: 101 }, { name: 'haproxy', pid: 102 }, { name: 'sslocal', pid: 103 }, { name: 'gateway', pid: 100 }] })
@@ -60,7 +61,8 @@ async function mockAPI(page: Page) {
     ], dot: { domain: 'dns.gateway.example.net', listen: '0.0.0.0:853', status: 'ok', latency_ms: 11.2, certificate_status: 'ok', expires_at: '2026-09-10T00:00:00Z', days_remaining: 60, domain_match: true } })
     if (path === '/api/v1/config') return json(bundle)
 		if (path === '/api/v1/config/validate') return json({ rule_count: 10023, warnings: [] })
-		if (path === '/api/v1/config/apply') return json({ changed: false, revision_id: 7, rule_count: 10023, warnings: [] })
+		if (path === '/api/v1/config/apply') return json({ id: route.request().headers()['x-5gws-operation-id'], status: 'queued', changed: false, revision_id: 0, rule_count: 0, warnings: null, queued_at: new Date().toISOString() }, 202)
+		if (path.startsWith('/api/v1/config/apply/')) return json({ id: path.split('/').pop(), status: 'succeeded', changed: false, revision_id: 7, rule_count: 10023, warnings: null, queued_at: new Date().toISOString(), finished_at: new Date().toISOString() })
     if (path === '/api/v1/active/rules') return json({
       revision_id: 7,
       active_at: activeRevision.active_at,
@@ -182,4 +184,38 @@ test('preflight and apply submit the visible configuration', async ({ page }) =>
 	await page.getByRole('button', { name: '应用' }).click()
 	await expect(page.getByText('配置没有变化')).toBeVisible()
 	expect(applyBody?.config.network.gateway_ip).toBe('10.0.0.2')
+})
+
+test('manual rule apply reconnects with the same operation ID', async ({ page }) => {
+	const operationIDs: string[] = []
+	let applyBody: typeof bundle | undefined
+	let posts = 0
+	let polls = 0
+	await mockAPI(page, async route => {
+		const request = route.request()
+		const path = new URL(request.url()).pathname
+		const json = (value: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) })
+		if (path === '/api/v1/config/apply' && request.method() === 'POST') {
+			posts++
+			operationIDs.push(request.headers()['x-5gws-operation-id'])
+			applyBody = request.postDataJSON() as typeof bundle
+			if (posts === 1) return route.abort('connectionfailed')
+			return json({ id: operationIDs[0], status: 'running', changed: false, revision_id: 0, rule_count: 0, warnings: null, queued_at: new Date().toISOString() }, 202)
+		}
+		polls++
+		return json({ id: operationIDs[0], status: polls === 1 ? 'running' : 'succeeded', changed: polls > 1, revision_id: polls > 1 ? 8 : 0, rule_count: polls > 1 ? 10024 : 0, warnings: null, queued_at: new Date().toISOString(), finished_at: polls > 1 ? new Date().toISOString() : undefined })
+	})
+	await page.goto('/')
+	await page.getByRole('button', { name: '规则', exact: true }).filter({ visible: true }).first().click()
+	await page.locator('main .panel-section').first().getByRole('button', { name: '规则', exact: true }).click()
+	const localRules = page.locator('section').filter({ has: page.getByRole('heading', { name: '本地规则' }) })
+	await localRules.getByPlaceholder('名称').last().fill('manual-smoke')
+	await localRules.getByPlaceholder('example.com, example.net').last().fill('manual-smoke.invalid')
+	await page.getByRole('button', { name: '应用', exact: true }).click()
+	await expect(page.getByText('数据面正在切换，正在重新连接')).toBeVisible()
+	await expect(page.getByText('配置已应用，共 10024 条规则')).toBeVisible({ timeout: 7000 })
+	expect(posts).toBe(2)
+	expect(operationIDs[0]).toMatch(/^[0-9a-f-]{36}$/)
+	expect(operationIDs[1]).toBe(operationIDs[0])
+	expect(applyBody?.rules.rules).toContainEqual(expect.objectContaining({ name: 'manual-smoke', domain_suffix: ['manual-smoke.invalid'] }))
 })

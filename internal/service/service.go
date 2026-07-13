@@ -12,12 +12,21 @@ import (
 )
 
 type Service struct {
+	ctx        context.Context
 	store      *store.Store
 	supervisor Runtime
 	applyMu    sync.Mutex
 	stateMu    sync.RWMutex
 	active     store.Revision
 	draft      store.Revision
+}
+
+type Options struct {
+	Context context.Context
+	Store   *store.Store
+	Runtime Runtime
+	Active  store.Revision
+	Draft   store.Revision
 }
 
 type Runtime interface {
@@ -41,8 +50,11 @@ type ApplyResult struct {
 	Warnings   []rules.Warning `json:"warnings"`
 }
 
-func New(state *store.Store, supervisor Runtime, active, draft store.Revision) *Service {
-	return &Service{store: state, supervisor: supervisor, active: active, draft: draft}
+func New(opts Options) *Service {
+	return &Service{
+		ctx: opts.Context, store: opts.Store, supervisor: opts.Runtime,
+		active: opts.Active, draft: opts.Draft,
+	}
 }
 
 func (s *Service) Store() *store.Store { return s.store }
@@ -105,9 +117,10 @@ func (s *Service) resolveBundle(ctx context.Context, bundle store.Bundle) (store
 	return bundle, norm.Warnings, nil
 }
 
-func (s *Service) ApplyBundle(ctx context.Context, bundle store.Bundle) (ApplyResult, error) {
+func (s *Service) ApplyBundle(bundle store.Bundle) (ApplyResult, error) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
+	ctx := s.ctx
 	active, err := s.store.Active(ctx)
 	if err != nil {
 		return ApplyResult{}, err
@@ -193,7 +206,7 @@ func (s *Service) Apply(ctx context.Context) (store.Revision, error) {
 	if err != nil {
 		return store.Revision{}, err
 	}
-	if _, err := s.ApplyBundle(ctx, draft.Bundle); err != nil {
+	if _, err := s.ApplyBundle(draft.Bundle); err != nil {
 		return store.Revision{}, err
 	}
 	return s.Active(ctx)

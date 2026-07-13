@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/pelletier/go-toml/v2"
 
 	"github.com/morain/5gws/internal/engine"
@@ -66,8 +68,33 @@ func (s *Server) applyConfig(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &bundle) {
 		return
 	}
-	result, err := s.Service.ApplyBundle(r.Context(), bundle)
-	respond(w, result, err)
+	operation, created, err := s.applyCoordinator().begin(r.Header.Get(applyOperationHeader), bundle)
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errApplyInProgress) {
+			status = http.StatusConflict
+		}
+		writeStatusError(w, status, err.Error())
+		return
+	}
+	status := http.StatusOK
+	if created || !terminalApplyStatus(operation.Status) {
+		status = http.StatusAccepted
+	}
+	writeJSON(w, status, operation)
+}
+
+func (s *Server) applyConfigStatus(w http.ResponseWriter, r *http.Request) {
+	operation, err := s.applyCoordinator().status(chi.URLParam(r, "id"))
+	if err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errApplyOperationUnknown) {
+			status = http.StatusNotFound
+		}
+		writeStatusError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, operation)
 }
 
 func (s *Server) importConfig(w http.ResponseWriter, r *http.Request) {

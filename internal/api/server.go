@@ -27,6 +27,13 @@ type Server struct {
 	Diagnostics diagnostics.Runner
 	loginMu     sync.Mutex
 	logins      map[string]loginAttempt
+	applyOnce   sync.Once
+	applies     *applyCoordinator
+}
+
+func (s *Server) applyCoordinator() *applyCoordinator {
+	s.applyOnce.Do(func() { s.applies = newApplyCoordinator(s.Service) })
+	return s.applies
 }
 
 func (s *Server) Router(local bool) http.Handler {
@@ -55,6 +62,7 @@ func (s *Server) Router(local bool) http.Handler {
 		router.Get("/api/v1/config", s.currentConfig)
 		router.Post("/api/v1/config/validate", s.validateConfig)
 		router.Post("/api/v1/config/apply", s.applyConfig)
+		router.Get("/api/v1/config/apply/{id}", s.applyConfigStatus)
 		router.Post("/api/v1/config/import", s.importConfig)
 		router.Get("/api/v1/active/rules", s.activeRules)
 		if local {

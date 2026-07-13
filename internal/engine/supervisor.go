@@ -22,11 +22,12 @@ import (
 )
 
 type Supervisor struct {
-	mu       sync.Mutex
-	logs     *LogBuffer
-	current  *processGroup
-	fatal    chan error
-	stateDir string
+	mu        sync.Mutex
+	lifecycle context.Context
+	logs      *LogBuffer
+	current   *processGroup
+	fatal     chan error
+	stateDir  string
 }
 
 type processGroup struct {
@@ -66,8 +67,8 @@ func (s *Supervisor) Status() []ProcessStatus {
 	return out
 }
 
-func NewSupervisor(stateDir string, logs *LogBuffer) *Supervisor {
-	return &Supervisor{stateDir: stateDir, logs: logs, fatal: make(chan error, 1)}
+func NewSupervisor(ctx context.Context, stateDir string, logs *LogBuffer) *Supervisor {
+	return &Supervisor{lifecycle: ctx, stateDir: stateDir, logs: logs, fatal: make(chan error, 1)}
 }
 
 func (s *Supervisor) Fatal() <-chan error { return s.fatal }
@@ -195,8 +196,8 @@ func (s *Supervisor) restoreLocked(ctx context.Context, previous *processGroup) 
 	go s.watch(restored)
 }
 
-func (s *Supervisor) startGroup(parent context.Context, root string, bundle store.Bundle) (*processGroup, error) {
-	ctx, cancel := context.WithCancel(parent)
+func (s *Supervisor) startGroup(operationCtx context.Context, root string, bundle store.Bundle) (*processGroup, error) {
+	ctx, cancel := context.WithCancel(s.lifecycle)
 	group := &processGroup{cancel: cancel, done: make(chan error, 1), root: root, bundle: bundle, stopped: make(chan struct{})}
 	commands := managedCommands(root, bundle)
 	for _, spec := range commands {
@@ -253,7 +254,7 @@ func (s *Supervisor) startGroup(parent context.Context, root string, bundle stor
 		return nil, err
 	default:
 		for _, address := range readinessAddresses(bundle) {
-			if err := waitTCP(ctx, address, readinessTimeout); err != nil {
+			if err := waitTCP(operationCtx, address, readinessTimeout); err != nil {
 				if stopErr := stopGroup(group); stopErr != nil {
 					return nil, errors.Join(err, stopErr)
 				}
