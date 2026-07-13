@@ -11,6 +11,7 @@ import (
 
 	"github.com/morain/5gws/internal/engine"
 	"github.com/morain/5gws/internal/ios"
+	"github.com/morain/5gws/internal/rules"
 	"github.com/morain/5gws/internal/store"
 )
 
@@ -51,7 +52,12 @@ func (s *Server) currentConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	active.Bundle.ResolvedRules = nil
+	active.Bundle.Rules = rules.EnsureManaged(active.Bundle.Rules)
 	writeJSON(w, http.StatusOK, active.Bundle)
+}
+
+func (s *Server) defaultRules(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, rules.ManagedFile())
 }
 
 func (s *Server) validateConfig(w http.ResponseWriter, r *http.Request) {
@@ -114,6 +120,7 @@ func (s *Server) importConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bundle.ResolvedRules = nil
+	bundle.Rules = rules.EnsureManaged(bundle.Rules)
 	writeJSON(w, http.StatusOK, bundle)
 }
 
@@ -154,6 +161,7 @@ func (s *Server) exportBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	revision.Bundle.ResolvedRules = nil
+	revision.Bundle.Rules = rules.EnsureManaged(revision.Bundle.Rules)
 	data, err := toml.Marshal(revision.Bundle)
 	if err != nil {
 		writeError(w, err)

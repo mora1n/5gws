@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/morain/5gws/internal/config"
+	"github.com/morain/5gws/internal/rules"
 )
 
 func TestRevisionLifecycle(t *testing.T) {
@@ -121,6 +122,56 @@ func TestRevisionReadAppliesNewConfigDefaults(t *testing.T) {
 	got := reloaded.Bundle.Config.Network.HAProxyMaxConnections
 	if got == nil || *got != config.DefaultHAProxyMaxConnections {
 		t.Fatalf("haproxy max connections = %v, want %d", got, config.DefaultHAProxyMaxConnections)
+	}
+}
+
+func TestRevisionReadAcceptsLegacyUppercaseRulesJSON(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "5gws.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	bundle := validBundle()
+	bundle.Rules = rules.ManagedFile()
+	active, err := s.Initialize(ctx, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload []byte
+	if err := s.db.QueryRowContext(ctx, "SELECT payload_json FROM revisions WHERE id = ?", active.ID).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		t.Fatal(err)
+	}
+	ruleFile := value["rules"].(map[string]any)
+	ruleFile["Imports"] = ruleFile["imports"]
+	ruleFile["Rules"] = ruleFile["rules"]
+	delete(ruleFile, "imports")
+	delete(ruleFile, "rules")
+	for _, item := range ruleFile["Imports"].([]any) {
+		fields := item.(map[string]any)
+		for _, name := range []string{"name", "type", "path", "url", "format", "exit", "dns_pool"} {
+			legacy := map[string]string{"name": "Name", "type": "Type", "path": "Path", "url": "URL", "format": "Format", "exit": "Exit", "dns_pool": "DNSPool"}[name]
+			fields[legacy] = fields[name]
+			delete(fields, name)
+		}
+	}
+	payload, err = json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE revisions SET payload_json = ? WHERE id = ?", payload, active.ID); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := s.Active(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rules.ValidateManaged(reloaded.Bundle.Rules); err != nil {
+		t.Fatalf("legacy rules were not decoded: %v", err)
 	}
 }
 

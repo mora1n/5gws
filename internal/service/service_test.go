@@ -22,6 +22,12 @@ type testRuntime struct {
 	applyContext   context.Context
 }
 
+type testRuleResolver struct{}
+
+func (testRuleResolver) Normalize(_ context.Context, file rules.File) (rules.Normalized, error) {
+	return rules.Normalized{Rules: append([]rules.Rule(nil), file.Rules...)}, nil
+}
+
 func (r *testRuntime) Preflight(_ context.Context, _ store.Bundle) error {
 	r.preflightCalls++
 	return r.preflightErr
@@ -74,7 +80,7 @@ func TestApplyUsesDaemonContext(t *testing.T) {
 	bundle := active.Bundle
 	bundle.Config.Logging.Level = "debug"
 	runtime := &testRuntime{}
-	app := New(Options{Context: ctx, Store: state, Runtime: runtime, Active: active, Draft: active})
+	app := New(Options{Context: ctx, Store: state, Runtime: runtime, Resolver: testRuleResolver{}, Active: active, Draft: active})
 	if _, err := app.ApplyBundle(bundle); err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +119,29 @@ func TestApplyBundleNoChangeDoesNotTouchRuntime(t *testing.T) {
 	var count int
 	if err := state.DB().QueryRow("SELECT COUNT(*) FROM revisions").Scan(&count); err != nil || count != 1 {
 		t.Fatalf("revision count=%d, %v", count, err)
+	}
+}
+
+func TestApplyBundleRejectsMissingManagedRuleBeforeRuntime(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	active, err := state.Initialize(context.Background(), serviceBundle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := active.Bundle
+	bundle.Rules.Rules = bundle.Rules.Rules[:1]
+	runtime := &testRuntime{}
+	_, err = newTestService(t, state, runtime).ApplyBundle(bundle)
+	if err == nil || runtime.preflightCalls != 0 || runtime.prepareCalls != 0 || runtime.applyCalls != 0 {
+		t.Fatalf("error=%v runtime=%+v", err, runtime)
+	}
+	current, err := state.Active(context.Background())
+	if err != nil || current.ID != active.ID {
+		t.Fatalf("active=%+v error=%v", current, err)
 	}
 }
 
@@ -188,12 +217,13 @@ func newTestService(t *testing.T, state *store.Store, runtime Runtime) *Service 
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(Options{Context: context.Background(), Store: state, Runtime: runtime, Active: active, Draft: draft})
+	return New(Options{Context: context.Background(), Store: state, Runtime: runtime, Resolver: testRuleResolver{}, Active: active, Draft: draft})
 }
 
 func serviceBundle() store.Bundle {
 	cfg := config.Config{Network: config.NetworkConfig{GatewayIP: "10.0.0.1", InternalCIDR: "172.22.0.0/16", IngressIface: "eth0"}, DNS: config.DNSConfig{DOTDomain: "dot.example.com"}, Logging: config.LoggingConfig{Level: "info"}, Exits: []config.ExitConfig{{Name: "direct", Type: "direct"}}}
 	cfg.ApplyDefaults()
 	rule := rules.Rule{Name: "test", Exit: "direct", DomainSuffix: []string{"example.com"}}
-	return store.Bundle{Config: cfg, Rules: rules.File{Rules: []rules.Rule{rule}}, ResolvedRules: []rules.Rule{rule}}
+	file := rules.EnsureManaged(rules.File{Rules: []rules.Rule{rule}})
+	return store.Bundle{Config: cfg, Rules: file, ResolvedRules: []rules.Rule{rule}}
 }

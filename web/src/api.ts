@@ -1,4 +1,4 @@
-import type { ActiveRules, ApplyOperation, Bundle, Dashboard, Diagnostics, IOSProfile, Metric } from './types'
+import type { ActiveRules, ApplyOperation, Bundle, Dashboard, Diagnostics, IOSProfile, Metric, RuleFile } from './types'
 
 export class APIError extends Error {
   constructor(message: string, readonly status: number) {
@@ -27,7 +27,8 @@ export const api = {
   dashboard: () => request<Dashboard>('/api/v1/dashboard'),
 	metrics: () => request<{ metrics: Metric[] }>('/api/v1/metrics'),
 	runDiagnostics: (scope = 'all') => request<Diagnostics>(`/api/v1/diagnostics/run?scope=${encodeURIComponent(scope)}`, { method: 'POST' }),
-	activeRules: () => request<ActiveRules>('/api/v1/active/rules'),
+  activeRules: () => request<ActiveRules>('/api/v1/active/rules'),
+  defaultRules: () => request<RuleFile>('/api/v1/rules/defaults'),
   config: () => request<Bundle>('/api/v1/config'),
   validateConfig: (bundle: Bundle) => request<{ rule_count: number; warnings: unknown[] }>('/api/v1/config/validate', { method: 'POST', body: JSON.stringify(bundle) }),
   applyConfig: (bundle: Bundle, operationID: string) => request<ApplyOperation>('/api/v1/config/apply', { method: 'POST', body: JSON.stringify(bundle), headers: { 'X-5gws-Operation-ID': operationID } }),

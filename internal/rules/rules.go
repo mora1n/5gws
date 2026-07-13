@@ -16,8 +16,54 @@ import (
 )
 
 type File struct {
-	Imports []Import `toml:"imports"`
-	Rules   []Rule   `toml:"rules"`
+	Imports []Import `toml:"imports" json:"imports"`
+	Rules   []Rule   `toml:"rules" json:"rules"`
+}
+
+func (f *File) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if _, lower := fields["imports"]; lower {
+		if _, legacy := fields["Imports"]; legacy {
+			return errors.New(`rules file contains both "imports" and legacy "Imports"`)
+		}
+	}
+	if _, lower := fields["rules"]; lower {
+		if _, legacy := fields["Rules"]; legacy {
+			return errors.New(`rules file contains both "rules" and legacy "Rules"`)
+		}
+	}
+	for name := range fields {
+		switch name {
+		case "imports", "Imports", "rules", "Rules":
+		default:
+			return fmt.Errorf("unknown field %q in rules file", name)
+		}
+	}
+	var decoded File
+	if raw, ok := firstJSONField(fields, "imports", "Imports"); ok {
+		if err := json.Unmarshal(raw, &decoded.Imports); err != nil {
+			return fmt.Errorf("decode imports: %w", err)
+		}
+	}
+	if raw, ok := firstJSONField(fields, "rules", "Rules"); ok {
+		if err := json.Unmarshal(raw, &decoded.Rules); err != nil {
+			return fmt.Errorf("decode rules: %w", err)
+		}
+	}
+	*f = decoded
+	return nil
+}
+
+func firstJSONField(fields map[string]json.RawMessage, names ...string) (json.RawMessage, bool) {
+	for _, name := range names {
+		if value, ok := fields[name]; ok {
+			return value, true
+		}
+	}
+	return nil, false
 }
 
 func (n Normalized) GatewayRules() []Rule {
@@ -86,13 +132,58 @@ func matchRuleDomain(rule Rule, host string) bool {
 }
 
 type Import struct {
-	Name    string `toml:"name"`
-	Type    string `toml:"type"`
-	Path    string `toml:"path"`
-	URL     string `toml:"url"`
-	Format  string `toml:"format"`
-	Exit    string `toml:"exit"`
-	DNSPool string `toml:"dns_pool"`
+	Name    string `toml:"name" json:"name"`
+	Type    string `toml:"type" json:"type"`
+	Path    string `toml:"path" json:"path"`
+	URL     string `toml:"url" json:"url"`
+	Format  string `toml:"format" json:"format"`
+	Exit    string `toml:"exit" json:"exit"`
+	DNSPool string `toml:"dns_pool" json:"dns_pool"`
+}
+
+func (i *Import) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	accepted := map[string]string{
+		"name": "Name", "type": "Type", "path": "Path", "url": "URL",
+		"format": "Format", "exit": "Exit", "dns_pool": "DNSPool",
+	}
+	for lower, legacy := range accepted {
+		if _, ok := fields[lower]; ok {
+			if _, duplicate := fields[legacy]; duplicate {
+				return fmt.Errorf("import contains both %q and legacy %q", lower, legacy)
+			}
+		}
+	}
+	for name := range fields {
+		known := false
+		for lower, legacy := range accepted {
+			if name == lower || name == legacy {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return fmt.Errorf("unknown field %q in import", name)
+		}
+	}
+	var decoded Import
+	targets := map[string]*string{
+		"name": &decoded.Name, "type": &decoded.Type, "path": &decoded.Path,
+		"url": &decoded.URL, "format": &decoded.Format, "exit": &decoded.Exit,
+		"dns_pool": &decoded.DNSPool,
+	}
+	for lower, target := range targets {
+		if raw, ok := firstJSONField(fields, lower, accepted[lower]); ok {
+			if err := json.Unmarshal(raw, target); err != nil {
+				return fmt.Errorf("decode import %s: %w", lower, err)
+			}
+		}
+	}
+	*i = decoded
+	return nil
 }
 
 type Rule struct {

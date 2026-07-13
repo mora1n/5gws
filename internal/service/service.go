@@ -15,6 +15,7 @@ type Service struct {
 	ctx        context.Context
 	store      *store.Store
 	supervisor Runtime
+	resolver   RuleResolver
 	applyMu    sync.Mutex
 	stateMu    sync.RWMutex
 	active     store.Revision
@@ -22,11 +23,16 @@ type Service struct {
 }
 
 type Options struct {
-	Context context.Context
-	Store   *store.Store
-	Runtime Runtime
-	Active  store.Revision
-	Draft   store.Revision
+	Context  context.Context
+	Store    *store.Store
+	Runtime  Runtime
+	Resolver RuleResolver
+	Active   store.Revision
+	Draft    store.Revision
+}
+
+type RuleResolver interface {
+	Normalize(context.Context, rules.File) (rules.Normalized, error)
 }
 
 type Runtime interface {
@@ -51,9 +57,13 @@ type ApplyResult struct {
 }
 
 func New(opts Options) *Service {
+	resolver := opts.Resolver
+	if resolver == nil {
+		resolver = rules.Resolver{Cache: opts.Store}
+	}
 	return &Service{
 		ctx: opts.Context, store: opts.Store, supervisor: opts.Runtime,
-		active: opts.Active, draft: opts.Draft,
+		resolver: resolver, active: opts.Active, draft: opts.Draft,
 	}
 }
 
@@ -106,7 +116,10 @@ func (s *Service) resolveBundle(ctx context.Context, bundle store.Bundle) (store
 	if err := bundle.Config.Validate(); err != nil {
 		return store.Bundle{}, nil, err
 	}
-	norm, err := (rules.Resolver{Cache: s.store}).Normalize(ctx, bundle.Rules)
+	if err := rules.ValidateManaged(bundle.Rules); err != nil {
+		return store.Bundle{}, nil, err
+	}
+	norm, err := s.resolver.Normalize(ctx, bundle.Rules)
 	if err != nil {
 		return store.Bundle{}, nil, err
 	}
@@ -123,6 +136,9 @@ func (s *Service) ApplyBundle(bundle store.Bundle) (ApplyResult, error) {
 	ctx := s.ctx
 	active, err := s.store.Active(ctx)
 	if err != nil {
+		return ApplyResult{}, err
+	}
+	if err := rules.ValidateManaged(bundle.Rules); err != nil {
 		return ApplyResult{}, err
 	}
 	if active.Bundle.SameInput(bundle) {

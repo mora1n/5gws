@@ -60,6 +60,7 @@ func (s *Server) Router(local bool) http.Handler {
 		router.Get("/api/v1/dashboard", s.dashboard)
 		router.Get("/api/v1/metrics", s.metrics)
 		router.Get("/api/v1/config", s.currentConfig)
+		router.Get("/api/v1/rules/defaults", s.defaultRules)
 		router.Post("/api/v1/config/validate", s.validateConfig)
 		router.Post("/api/v1/config/apply", s.applyConfig)
 		router.Get("/api/v1/config/apply/{id}", s.applyConfigStatus)

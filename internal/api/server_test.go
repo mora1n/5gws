@@ -12,6 +12,8 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
+
 	"github.com/morain/5gws/internal/auth"
 	"github.com/morain/5gws/internal/config"
 	"github.com/morain/5gws/internal/diagnostics"
@@ -22,6 +24,12 @@ import (
 )
 
 type apiRuntime struct{}
+
+type apiRuleResolver struct{}
+
+func (apiRuleResolver) Normalize(_ context.Context, file rules.File) (rules.Normalized, error) {
+	return rules.Normalized{Rules: append([]rules.Rule(nil), file.Rules...)}, nil
+}
 
 func (apiRuntime) Preflight(_ context.Context, _ store.Bundle) error { return nil }
 
@@ -168,6 +176,123 @@ func TestWebConfigValidateAndNoChangeApplyDoNotCreateRevisions(t *testing.T) {
 	configResponse := serve(router, request(t, http.MethodGet, "/api/v1/config", nil))
 	if strings.Contains(configResponse.Body.String(), "resolved_rules") {
 		t.Fatalf("config leaked resolved rules: %s", configResponse.Body.String())
+	}
+	if strings.Contains(configResponse.Body.String(), `"Rules"`) || !strings.Contains(configResponse.Body.String(), `"rules":{"imports"`) {
+		t.Fatalf("config rules do not use lowercase JSON keys: %s", configResponse.Body.String())
+	}
+	defaults := serve(router, request(t, http.MethodGet, "/api/v1/rules/defaults", nil))
+	for _, name := range []string{"ip-check", "speedtest", "cn", "gfw"} {
+		if defaults.Code != http.StatusOK || !strings.Contains(defaults.Body.String(), `"name":"`+name+`"`) {
+			t.Fatalf("defaults missing %q: %d %s", name, defaults.Code, defaults.Body.String())
+		}
+	}
+}
+
+func TestCurrentConfigSupplementsMissingManagedRulesWithoutMutatingActive(t *testing.T) {
+	server, closeState := testServer(t)
+	defer closeState()
+	active, err := server.Service.Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupted := active.Bundle
+	corrupted.Rules = rules.File{Rules: []rules.Rule{{Name: "uhd", Exit: "direct", DomainSuffix: []string{"uhdnow.com"}}}}
+	if _, err := server.Service.Store().DB().Exec(`UPDATE revisions SET payload_json = ? WHERE id = ?`, mustJSON(t, corrupted), active.ID); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := server.Service.Store().Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Service = service.New(service.Options{Context: context.Background(), Store: server.Service.Store(), Runtime: apiRuntime{}, Resolver: apiRuleResolver{}, Active: loaded, Draft: loaded})
+	response := serve(server.Router(true), request(t, http.MethodGet, "/api/v1/config", nil))
+	for _, name := range []string{"uhd", "ip-check", "speedtest", "cn", "gfw"} {
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"name":"`+name+`"`) {
+			t.Fatalf("supplemented config missing %q: %d %s", name, response.Code, response.Body.String())
+		}
+	}
+	backup := serve(server.Router(true), request(t, http.MethodGet, "/api/v1/backup", nil))
+	for _, name := range []string{"uhd", "ip-check", "speedtest", "cn", "gfw"} {
+		if backup.Code != http.StatusOK || !strings.Contains(backup.Body.String(), `name = '`+name+`'`) {
+			t.Fatalf("backup missing %q: %d %s", name, backup.Code, backup.Body.String())
+		}
+	}
+	stored, err := server.Service.Store().Active(context.Background())
+	if err != nil || len(stored.Bundle.Rules.Imports) != 0 || len(stored.Bundle.Rules.Rules) != 1 {
+		t.Fatalf("active bundle was mutated: %+v, %v", stored.Bundle.Rules, err)
+	}
+}
+
+func TestAsyncApplyRejectsMissingManagedRuleWithoutActivation(t *testing.T) {
+	server, closeState := testServer(t)
+	defer closeState()
+	active, err := server.Service.Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := active.Bundle
+	bundle.Rules.Rules = bundle.Rules.Rules[:1]
+	id := "6c231346-0d26-47d3-b54e-f36b49c7f147"
+	req := request(t, http.MethodPost, "/api/v1/config/apply", bundle)
+	req.Header.Set(applyOperationHeader, id)
+	if response := serve(server.Router(true), req); response.Code != http.StatusAccepted {
+		t.Fatalf("apply=%d %s", response.Code, response.Body.String())
+	}
+	operation := waitApplyOperation(t, server.Router(true), id)
+	if operation.Status != "failed" || !strings.Contains(operation.Error, "managed rule") {
+		t.Fatalf("operation=%+v", operation)
+	}
+	current, err := server.Service.Active(context.Background())
+	if err != nil || current.ID != active.ID {
+		t.Fatalf("active=%+v error=%v", current, err)
+	}
+}
+
+func TestAsyncApplyRejectsModifiedManagedImportWithoutActivation(t *testing.T) {
+	server, closeState := testServer(t)
+	defer closeState()
+	active, err := server.Service.Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := active.Bundle
+	bundle.Rules.Imports[0].URL = "https://example.com/modified.json"
+	id := "4b762719-544b-42da-a6d5-b5fc91719d5c"
+	req := request(t, http.MethodPost, "/api/v1/config/apply", bundle)
+	req.Header.Set(applyOperationHeader, id)
+	if response := serve(server.Router(true), req); response.Code != http.StatusAccepted {
+		t.Fatalf("apply=%d %s", response.Code, response.Body.String())
+	}
+	operation := waitApplyOperation(t, server.Router(true), id)
+	if operation.Status != "failed" || !strings.Contains(operation.Error, "read-only") {
+		t.Fatalf("operation=%+v", operation)
+	}
+	current, err := server.Service.Active(context.Background())
+	if err != nil || current.ID != active.ID {
+		t.Fatalf("active=%+v error=%v", current, err)
+	}
+}
+
+func TestConfigImportSupplementsManagedRules(t *testing.T) {
+	server, closeState := testServer(t)
+	defer closeState()
+	active, err := server.Service.Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := active.Bundle
+	bundle.Rules = rules.File{Rules: []rules.Rule{{Name: "uhd", Exit: "direct", DomainSuffix: []string{"uhdnow.com"}}}}
+	data, err := toml.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/config/import", bytes.NewReader(data))
+	req.Header.Set("Content-Type", "application/toml")
+	response := serve(server.Router(true), req)
+	for _, name := range []string{"uhd", "ip-check", "speedtest", "cn", "gfw"} {
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"name":"`+name+`"`) {
+			t.Fatalf("import missing %q: %d %s", name, response.Code, response.Body.String())
+		}
 	}
 }
 
@@ -363,16 +488,26 @@ func testServerIOS(t *testing.T, iosEnabled bool) (*Server, func()) {
 	}
 	cfg.ApplyDefaults()
 	rule := rules.Rule{Name: "test", Exit: "direct", DomainSuffix: []string{"example.com"}}
-	active, err := state.Initialize(context.Background(), store.Bundle{Config: cfg, Rules: rules.File{Rules: []rules.Rule{rule}}, ResolvedRules: []rules.Rule{rule}})
+	file := rules.EnsureManaged(rules.File{Rules: []rules.Rule{rule}})
+	active, err := state.Initialize(context.Background(), store.Bundle{Config: cfg, Rules: file, ResolvedRules: []rules.Rule{rule}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	logs := engine.NewLogBuffer(1024)
 	supervisor := engine.NewSupervisor(context.Background(), t.TempDir(), logs)
 	application := service.New(service.Options{
-		Context: context.Background(), Store: state, Runtime: apiRuntime{}, Active: active, Draft: active,
+		Context: context.Background(), Store: state, Runtime: apiRuntime{}, Resolver: apiRuleResolver{}, Active: active, Draft: active,
 	})
 	return &Server{Service: application, Auth: auth.New(state.DB(), time.Hour), Supervisor: supervisor, Version: "test"}, func() { state.Close() }
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func request(t *testing.T, method, path string, body any) *http.Request {

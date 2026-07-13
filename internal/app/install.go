@@ -51,7 +51,7 @@ func runInstall(args []string, input io.Reader, out io.Writer) error {
 			return err
 		}
 	}
-	ruleFile := defaultRuleFile()
+	ruleFile := rules.ManagedFile()
 	norm, err := (rules.Resolver{}).Normalize(context.Background(), ruleFile)
 	if err != nil {
 		return err
@@ -151,17 +151,6 @@ func enabledText(enabled bool) string {
 		return "启用"
 	}
 	return "关闭"
-}
-
-func defaultRuleFile() rules.File {
-	return rules.File{
-		Rules: []rules.Rule{{Name: "ip-check", Exit: "direct", DomainSuffix: []string{"icanhazip.com", "ipinfo.io", "ippure.com"}}},
-		Imports: []rules.Import{
-			{Name: "speedtest", Type: "sing-box", URL: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-speedtest.json", Exit: "direct"},
-			{Name: "cn", Type: "sing-box", URL: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.json", DNSPool: "cn"},
-			{Name: "gfw", Type: "sing-box", URL: "https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/gfw.json", Exit: "direct"},
-		},
-	}
 }
 
 func refuseLegacyInstall(stateDir string) error {

@@ -1,6 +1,7 @@
 export interface Exit { name: string; type: 'direct' | 'shadowsocks-rust'; fwmark: number; server: string; server_port: number; method: string; password: string; username: string; listen_address: string; listen_port: number; tcp: boolean | null; udp: boolean | null; timeout_seconds: number }
 export interface Rule { name: string; exit: string; dns_pool: string; domain?: string[]; domain_suffix?: string[]; domain_keyword?: string[]; domain_regex?: string[]; ip_cidr?: string[]; rule_set?: string[] }
 export interface ImportRule { name: string; type: string; path: string; url: string; format: string; exit: string; dns_pool: string }
+export interface RuleFile { imports: ImportRule[] | null; rules: Rule[] | null }
 export interface Bundle {
   config: {
     system: { config_dir: string; state_dir: string; run_dir: string; user: string }
@@ -12,7 +13,7 @@ export interface Bundle {
     ios: { enabled: boolean; listen: string; base_url: string; organization: string; profile_identifier: string }
     exits: Exit[]
   }
-  rules: { imports: ImportRule[] | null; rules: Rule[] | null }
+  rules: RuleFile
   resolved_rules?: Rule[] | null
 }
 export interface Dashboard { version: string; active_revision: number; rules: number; processes: { name: string; pid: number }[] }

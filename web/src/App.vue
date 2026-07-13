@@ -12,7 +12,7 @@
       <div v-if="message" class="mx-4 mt-4 flex items-center gap-2 border px-3 py-2 text-sm sm:mx-6" :class="error ? 'border-error/40 bg-error/10 text-error' : 'border-success/40 bg-success/10 text-success'"><LoaderCircle v-if="applying" class="size-4 shrink-0 animate-spin" /><CircleAlert v-else-if="error" class="size-4 shrink-0" /><CircleCheck v-else class="size-4 shrink-0" /><span class="break-all">{{ message }}</span><button class="btn btn-ghost btn-square btn-xs ml-auto" title="关闭" @click="message = ''"><X class="size-4" /></button></div>
       <OverviewPage v-if="page === 'overview'" :dashboard="dashboard" :metrics="metrics" :diagnostics="diagnostics" :runtime-busy="runtimeBusy" @refresh="refresh" @refresh-runtime="refreshRuntime" />
       <NetworkPage v-else-if="page === 'network' && bundle" v-model:bundle="bundle" :diagnostics="diagnostics" :diagnostics-busy="diagnosticsBusy" @refresh-diagnostics="runDiagnostics('network')" />
-      <RulesPage v-else-if="page === 'rules' && bundle" v-model:bundle="bundle" :active-revision="dashboard?.active_revision || 0" @error="show($event, true)" />
+      <RulesPage v-else-if="page === 'rules' && bundle && managedRules" v-model:bundle="bundle" :managed="managedRules" :active-revision="dashboard?.active_revision || 0" @error="show($event, true)" />
       <ExitsPage v-else-if="page === 'exits' && bundle" v-model:bundle="bundle" :diagnostics="diagnostics" :diagnostics-busy="diagnosticsBusy" @refresh-diagnostics="runDiagnostics('exits')" />
       <LogsPage v-else-if="page === 'logs'" @error="show($event, true)" />
       <SettingsPage v-else-if="page === 'settings' && bundle" v-model:bundle="bundle" :active-revision="dashboard?.active_revision || 0" @imported="imported" @message="show($event, false)" @error="show($event, true)" @signed-out="authenticated = false" />
@@ -23,12 +23,13 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { CircleAlert, CircleCheck, LoaderCircle, Moon, Play, ShieldCheck, Sun, X } from '@lucide/vue'
-import { APIError, api } from '@/api'; import type { ApplyOperation, Bundle, Dashboard, Diagnostics, Metric } from '@/types'
+import { APIError, api } from '@/api'; import type { ApplyOperation, Bundle, Dashboard, Diagnostics, Metric, RuleFile } from '@/types'
 import AuthView from '@/components/AuthView.vue'; import AppNav from '@/components/AppNav.vue'
 import OverviewPage from '@/pages/OverviewPage.vue'; import NetworkPage from '@/pages/NetworkPage.vue'; import RulesPage from '@/pages/RulesPage.vue'; import ExitsPage from '@/pages/ExitsPage.vue'; import LogsPage from '@/pages/LogsPage.vue'; import SettingsPage from '@/pages/SettingsPage.vue'
 
 const loading=ref(true), authenticated=ref(false), needsSetup=ref(false), busy=ref(false), applying=ref(false), error=ref(false)
 const page=ref('overview'), message=ref(''), startupError=ref(''), dashboard=ref<Dashboard|null>(null), bundle=ref<Bundle|null>(null)
+const managedRules=ref<RuleFile|null>(null)
 const metrics=ref<Metric[]>([]), diagnostics=ref<Diagnostics|null>(null), diagnosticsBusy=ref(false), metricsBusy=ref(false)
 let metricsTimer: number | undefined
 let disposed=false
@@ -39,7 +40,7 @@ const editablePage=computed(()=>['network','rules','exits','settings'].includes(
 const runtimeBusy=computed(()=>metricsBusy.value || diagnosticsBusy.value)
 const themeTitle=computed(()=>theme.value === 'light-neutral' ? '切换到深色模式' : '切换到浅色模式')
 async function start(){ authenticated.value=true; await reload(); void refreshRuntime(); startMetricsTimer() }
-async function reload(){ [dashboard.value,bundle.value]=await Promise.all([api.dashboard(),api.config()]) }
+async function reload(){ [dashboard.value,bundle.value,managedRules.value]=await Promise.all([api.dashboard(),api.config(),api.defaultRules()]) }
 async function refresh(){ try{ await reload() }catch(cause){ show(cause,true) } }
 async function validate(){ if(!bundle.value)return; await action(async()=>{ const result=await api.validateConfig(bundle.value!); return `预检通过，共 ${result.rule_count} 条规则` }) }
 async function apply(){

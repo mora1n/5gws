@@ -1,5 +1,14 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
+const managedRules = {
+  imports: [
+    { name: 'speedtest', type: 'sing-box', path: '', url: 'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/category-speedtest.json', format: '', exit: 'direct', dns_pool: '' },
+    { name: 'cn', type: 'sing-box', path: '', url: 'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/cn.json', format: '', exit: '', dns_pool: 'cn' },
+    { name: 'gfw', type: 'sing-box', path: '', url: 'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/sing/geo/geosite/gfw.json', format: '', exit: 'direct', dns_pool: '' },
+  ],
+  rules: [{ name: 'ip-check', exit: 'direct', dns_pool: '', domain_suffix: ['icanhazip.com', 'ipinfo.io', 'ippure.com'] }],
+}
+
 const bundle = {
   config: {
     system: { config_dir: '/etc/5gws', state_dir: '/var/lib/5gws', run_dir: '/run/5gws', user: 'root' },
@@ -15,8 +24,8 @@ const bundle = {
     ],
   },
   rules: {
-    imports: [{ name: 'category-speedtest-global', type: 'sing-box', path: '', url: 'https://raw.githubusercontent.com/example/very/long/path/category-speedtest.json', format: '', exit: 'direct', dns_pool: '' }],
-    rules: [{ name: 'openai-and-related-services', exit: 'tokyo-shadowsocks-production-long-name', dns_pool: '', domain_suffix: ['openai.com', 'chatgpt.com', 'very-long-service-domain.example.net'] }],
+    imports: [...managedRules.imports, { name: 'category-speedtest-global', type: 'sing-box', path: '', url: 'https://raw.githubusercontent.com/example/very/long/path/category-speedtest.json', format: '', exit: 'direct', dns_pool: '' }],
+    rules: [...managedRules.rules, { name: 'openai-and-related-services', exit: 'tokyo-shadowsocks-production-long-name', dns_pool: '', domain_suffix: ['openai.com', 'chatgpt.com', 'very-long-service-domain.example.net'] }],
   },
 }
 
@@ -60,6 +69,7 @@ async function mockAPI(page: Page, applyHandler?: (route: Route) => Promise<unkn
       { name: 'tokyo-shadowsocks-production-long-name', type: 'shadowsocks-rust', status: 'ok', upstream: 'edge.gateway.example.net:8388', upstream_status: 'ok', upstream_latency_ms: 21.1, egress_status: 'ok', egress_ip: '198.51.100.20', egress_latency_ms: 88.4 },
     ], dot: { domain: 'dns.gateway.example.net', listen: '0.0.0.0:853', status: 'ok', latency_ms: 11.2, certificate_status: 'ok', expires_at: '2026-09-10T00:00:00Z', days_remaining: 60, domain_match: true } })
     if (path === '/api/v1/config') return json(bundle)
+		if (path === '/api/v1/rules/defaults') return json(managedRules)
 		if (path === '/api/v1/config/validate') return json({ rule_count: 10023, warnings: [] })
 		if (path === '/api/v1/config/apply') return json({ id: route.request().headers()['x-5gws-operation-id'], status: 'queued', changed: false, revision_id: 0, rule_count: 0, warnings: null, queued_at: new Date().toISOString() }, 202)
 		if (path.startsWith('/api/v1/config/apply/')) return json({ id: path.split('/').pop(), status: 'succeeded', changed: false, revision_id: 7, rule_count: 10023, warnings: null, queued_at: new Date().toISOString(), finished_at: new Date().toISOString() })
@@ -122,6 +132,14 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
 				await expect(page.getByText('applied-openai')).toBeVisible()
 				await expect(page.getByText('DNS 解析池 · pool:cn')).toBeVisible()
 				await expect(page.getByText('还有 1 项')).toBeVisible()
+				const defaults = page.locator('section').filter({ has: page.getByRole('heading', { name: '默认规则', exact: true }) })
+				for (const name of ['ip-check', 'speedtest', 'cn', 'gfw']) await expect(defaults.getByText(name, { exact: true })).toBeVisible()
+				await expect(defaults.locator('input, select')).toHaveCount(0)
+				await expect(defaults.getByTitle('删除')).toHaveCount(0)
+				const custom = page.locator('section').filter({ has: page.getByRole('heading', { name: '自定义本地规则' }) })
+				await expect(custom).toBeVisible()
+				await expect(custom.getByPlaceholder('名称')).toHaveValue('openai-and-related-services')
+				await page.screenshot({ path: `/tmp/5gws-panel-${viewport.name}-rules.png`, fullPage: true })
 			}
 			if (heading === '日志') {
 				await expect(page.getByRole('button', { name: '保存' })).toBeHidden()
@@ -207,8 +225,8 @@ test('manual rule apply reconnects with the same operation ID', async ({ page })
 	})
 	await page.goto('/')
 	await page.getByRole('button', { name: '规则', exact: true }).filter({ visible: true }).first().click()
-	await page.locator('main .panel-section').first().getByRole('button', { name: '规则', exact: true }).click()
-	const localRules = page.locator('section').filter({ has: page.getByRole('heading', { name: '本地规则' }) })
+	await page.getByRole('button', { name: '新建规则', exact: true }).click()
+	const localRules = page.locator('section').filter({ has: page.getByRole('heading', { name: '自定义本地规则' }) })
 	await localRules.getByPlaceholder('名称').last().fill('manual-smoke')
 	await localRules.getByPlaceholder('example.com, example.net').last().fill('manual-smoke.invalid')
 	await page.getByRole('button', { name: '应用', exact: true }).click()
@@ -218,4 +236,6 @@ test('manual rule apply reconnects with the same operation ID', async ({ page })
 	expect(operationIDs[0]).toMatch(/^[0-9a-f-]{36}$/)
 	expect(operationIDs[1]).toBe(operationIDs[0])
 	expect(applyBody?.rules.rules).toContainEqual(expect.objectContaining({ name: 'manual-smoke', domain_suffix: ['manual-smoke.invalid'] }))
+	for (const name of ['ip-check', 'openai-and-related-services', 'manual-smoke']) expect(applyBody?.rules.rules).toContainEqual(expect.objectContaining({ name }))
+	for (const name of ['speedtest', 'cn', 'gfw', 'category-speedtest-global']) expect(applyBody?.rules.imports).toContainEqual(expect.objectContaining({ name }))
 })
