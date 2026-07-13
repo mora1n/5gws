@@ -253,8 +253,18 @@ func (s *Supervisor) startGroup(operationCtx context.Context, root string, bundl
 		}
 		return nil, err
 	default:
+		readinessCtx, cancelReadiness := context.WithTimeout(operationCtx, readinessTimeout)
+		defer cancelReadiness()
 		for _, address := range readinessAddresses(bundle) {
-			if err := waitTCP(operationCtx, address, readinessTimeout); err != nil {
+			if err := waitTCP(readinessCtx, address, readinessTimeout); err != nil {
+				if stopErr := stopGroup(group); stopErr != nil {
+					return nil, errors.Join(err, stopErr)
+				}
+				return nil, err
+			}
+		}
+		for _, probe := range dnsReadinessProbes(bundle.Config) {
+			if err := waitDNSReadiness(readinessCtx, probe); err != nil {
 				if stopErr := stopGroup(group); stopErr != nil {
 					return nil, errors.Join(err, stopErr)
 				}

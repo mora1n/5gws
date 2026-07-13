@@ -78,6 +78,10 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	assertEqualStrings(t, cfg.DNS.UpstreamsCN, []string{
 		"180.76.76.76", "101.226.4.6", "218.30.118.6",
 		"114.114.114.114", "114.114.115.115", "117.50.10.10", "52.80.66.66",
+		"223.5.5.5", "223.6.6.6", "https://dns.alidns.com/dns-query", "tls://dns.alidns.com",
+		"119.29.29.29", "https://doh.pub/dns-query", "tls://dot.pub",
+		"180.184.1.1", "180.184.2.2", "https://doh.360.cn/dns-query", "tls://dot.360.cn",
+		"https://doh-pure.onedns.net/dns-query", "tls://dot-pure.onedns.net", "1.2.4.8", "210.2.4.8",
 	})
 	assertEqualStrings(t, cfg.DNS.UpstreamsOverseasPrivate, []string{"22.22.22.22"})
 	assertEqualStrings(t, cfg.DNS.UpstreamsOverseasPublic, []string{
@@ -181,11 +185,22 @@ func TestApplyDefaultsMigratesLegacyIOSAddress(t *testing.T) {
 }
 
 func TestApplyDefaultsMigratesOnlyLegacyCNUpstreams(t *testing.T) {
-	cfg := validConfig()
-	cfg.DNS.UpstreamsCN = []string{"180.76.76.76", "101.226.4.6", "218.30.118.6"}
-	cfg.ApplyDefaults()
-	assertEqualStrings(t, cfg.DNS.UpstreamsCN, defaultCNUpstreams())
+	for _, legacy := range [][]string{
+		{"180.76.76.76", "101.226.4.6", "218.30.118.6"},
+		{
+			"180.76.76.76", "101.226.4.6", "218.30.118.6",
+			"114.114.114.114", "114.114.115.115", "117.50.10.10", "52.80.66.66",
+		},
+	} {
+		cfg := validConfig()
+		cfg.DNS.UpstreamsCN = append([]string(nil), legacy...)
+		cfg.ApplyDefaults()
+		assertEqualStrings(t, cfg.DNS.UpstreamsCN, appendMissing(legacy, defaultCNUpstreams()))
+		cfg.ApplyDefaults()
+		assertEqualStrings(t, cfg.DNS.UpstreamsCN, appendMissing(legacy, defaultCNUpstreams()))
+	}
 
+	cfg := validConfig()
 	custom := []string{"192.0.2.53", "198.51.100.53"}
 	cfg.DNS.UpstreamsCN = append([]string(nil), custom...)
 	cfg.ApplyDefaults()

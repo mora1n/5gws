@@ -91,6 +91,35 @@ async function mockAPI(page: Page, applyHandler?: (route: Route) => Promise<unkn
   })
 }
 
+test('DNS upstream editor preserves Enter and submits normalized lines', async ({ page }) => {
+	let submitted: typeof bundle | undefined
+	await mockAPI(page, async route => {
+		submitted = route.request().postDataJSON() as typeof bundle
+		return route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({ id: 'test', status: 'succeeded', changed: true, revision_id: 8, rule_count: 10023, warnings: null }),
+		})
+	})
+	await page.goto('/')
+	await page.getByRole('button', { name: 'DNS 与网络', exact: true }).filter({ visible: true }).click()
+
+	const editor = page.getByLabel('国内上游')
+	await editor.focus()
+	await editor.press('Control+End')
+	await editor.press('Enter')
+	await expect(editor).toHaveValue('223.5.5.5\n119.29.29.29\n')
+	await editor.type('tls://dns.alidns.com')
+	await expect(editor).toHaveValue('223.5.5.5\n119.29.29.29\ntls://dns.alidns.com')
+
+	await page.getByRole('button', { name: '应用', exact: true }).click()
+	await expect.poll(() => submitted?.config.dns.upstreams_cn).toEqual([
+		'223.5.5.5',
+		'119.29.29.29',
+		'tls://dns.alidns.com',
+	])
+})
+
 for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'mobile', width: 390, height: 844 }]) {
   test(`${viewport.name} panel pages fit the viewport`, async ({ page }) => {
     const consoleErrors: string[] = []

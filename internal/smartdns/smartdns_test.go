@@ -22,7 +22,7 @@ func TestConfigRendersAddressRules(t *testing.T) {
 		"bind 0.0.0.0:1053",
 		"bind-tcp 0.0.0.0:1053",
 		"bind-tls 0.0.0.0:1853",
-		"bind-tls 0.0.0.0:853 -group overseas_public -no-rule-addr",
+		"bind-tls 0.0.0.0:853",
 		"bind-cert-file /etc/5gws/certs/fullchain.pem",
 		"bind-cert-key-file /etc/5gws/certs/privkey.pem",
 		"cache-file /var/log/smartdns/smartdns.cache",
@@ -38,6 +38,18 @@ func TestConfigRendersAddressRules(t *testing.T) {
 		"server 114.114.115.115 -group cn -exclude-default-group",
 		"server 117.50.10.10 -group cn -exclude-default-group",
 		"server 52.80.66.66 -group cn -exclude-default-group",
+		"server 223.5.5.5 -group cn -exclude-default-group",
+		"server https://dns.alidns.com/dns-query -group cn -exclude-default-group",
+		"server tls://dns.alidns.com -group cn -exclude-default-group",
+		"server 119.29.29.29 -group cn -exclude-default-group",
+		"server https://doh.pub/dns-query -group cn -exclude-default-group",
+		"server tls://dot.pub -group cn -exclude-default-group",
+		"server 180.184.1.1 -group cn -exclude-default-group",
+		"server https://doh.360.cn/dns-query -group cn -exclude-default-group",
+		"server tls://dot.360.cn -group cn -exclude-default-group",
+		"server https://doh-pure.onedns.net/dns-query -group cn -exclude-default-group",
+		"server tls://dot-pure.onedns.net -group cn -exclude-default-group",
+		"server 1.2.4.8 -group cn -exclude-default-group",
 		"server 22.22.22.22 -group overseas_private",
 		"server 22.22.22.22 -group overseas_public -exclude-default-group",
 		"server https://dns.quad9.net/dns-query -group overseas_public -exclude-default-group",
@@ -58,15 +70,13 @@ func TestConfigRendersAddressRules(t *testing.T) {
 	}
 	if strings.Contains(out, "bind 0.0.0.0:1053 -group") ||
 		strings.Contains(out, "bind-tcp 0.0.0.0:1053 -group") ||
-		strings.Contains(out, "bind-tls 0.0.0.0:1853 -group") {
+		strings.Contains(out, "bind-tls 0.0.0.0:1853 -group") ||
+		strings.Contains(out, "bind-tls 0.0.0.0:853 -group") ||
+		strings.Contains(out, "bind-tls 0.0.0.0:853 -no-rule-addr") {
 		t.Fatalf("internal DNS listeners must allow nameserver rules to select groups:\n%s", out)
 	}
 	if strings.Contains(out, "server 22.22.22.22 -group overseas_private -exclude-default-group") {
 		t.Fatalf("private overseas upstream must remain in the default group for unmatched internal DNS:\n%s", out)
-	}
-	if strings.Contains(out, "server 223.5.5.5 -group cn") ||
-		strings.Contains(out, "server 119.29.29.29 -group cn") {
-		t.Fatalf("CN defaults must avoid resolvers that returned overseas NetEase CDN from JP:\n%s", out)
 	}
 	if strings.Contains(out, "address /example.cn/") {
 		t.Fatalf("DNS pool rule must not render address rewrite:\n%s", out)

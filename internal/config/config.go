@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -219,8 +220,10 @@ func (c *Config) ApplyDefaults() {
 	if c.DNS.CacheSize == 0 {
 		c.DNS.CacheSize = 32768
 	}
-	if len(c.DNS.UpstreamsCN) == 0 || usesLegacyCNUpstreams(c.DNS.UpstreamsCN) {
+	if len(c.DNS.UpstreamsCN) == 0 {
 		c.DNS.UpstreamsCN = defaultCNUpstreams()
+	} else if usesLegacyCNUpstreams(c.DNS.UpstreamsCN) {
+		c.DNS.UpstreamsCN = appendMissing(c.DNS.UpstreamsCN, defaultCNUpstreams())
 	}
 	if len(c.DNS.UpstreamsOverseasPrivate) == 0 {
 		c.DNS.UpstreamsOverseasPrivate = []string{
@@ -263,14 +266,54 @@ func defaultCNUpstreams() []string {
 		"114.114.115.115",
 		"117.50.10.10",
 		"52.80.66.66",
+		"223.5.5.5",
+		"223.6.6.6",
+		"https://dns.alidns.com/dns-query",
+		"tls://dns.alidns.com",
+		"119.29.29.29",
+		"https://doh.pub/dns-query",
+		"tls://dot.pub",
+		"180.184.1.1",
+		"180.184.2.2",
+		"https://doh.360.cn/dns-query",
+		"tls://dot.360.cn",
+		"https://doh-pure.onedns.net/dns-query",
+		"tls://dot-pure.onedns.net",
+		"1.2.4.8",
+		"210.2.4.8",
 	}
 }
 
 func usesLegacyCNUpstreams(values []string) bool {
-	return len(values) == 3 &&
-		values[0] == "180.76.76.76" &&
-		values[1] == "101.226.4.6" &&
-		values[2] == "218.30.118.6"
+	legacy := [][]string{
+		{"180.76.76.76", "101.226.4.6", "218.30.118.6"},
+		{
+			"180.76.76.76", "101.226.4.6", "218.30.118.6",
+			"114.114.114.114", "114.114.115.115", "117.50.10.10", "52.80.66.66",
+		},
+	}
+	for _, candidate := range legacy {
+		if slices.Equal(values, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendMissing(values, additions []string) []string {
+	out := append([]string(nil), values...)
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	for _, value := range values {
+		seen[value] = struct{}{}
+	}
+	for _, value := range additions {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		out = append(out, value)
+		seen[value] = struct{}{}
+	}
+	return out
 }
 
 func (c Config) Validate() error {

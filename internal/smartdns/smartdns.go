@@ -37,7 +37,7 @@ func GenerateAt(cfg config.Config, norm rules.Normalized, configDir string) (Out
 	fmt.Fprintf(&b, "bind-tcp %s\n", cfg.DNS.ListenTCP)
 	fmt.Fprintf(&b, "bind-tls %s\n", cfg.DNS.ListenDOT)
 	if cfg.DNS.ListenPublicDOT != "" {
-		fmt.Fprintf(&b, "bind-tls %s -group overseas_public -no-rule-addr\n", cfg.DNS.ListenPublicDOT)
+		fmt.Fprintf(&b, "bind-tls %s\n", cfg.DNS.ListenPublicDOT)
 	}
 	fmt.Fprintf(&b, "bind-cert-file %s\n", cfg.DNS.CertFile)
 	fmt.Fprintf(&b, "bind-cert-key-file %s\n", cfg.DNS.KeyFile)
