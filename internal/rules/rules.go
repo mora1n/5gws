@@ -311,8 +311,8 @@ func validateRule(rule Rule) error {
 	if (rule.Exit == "") == (rule.DNSPool == "") {
 		return fmt.Errorf("rule %q: exactly one of exit or dns_pool is required", rule.Name)
 	}
-	if rule.DNSPool != "" && !validDNSPool(rule.DNSPool) {
-		return fmt.Errorf("rule %q: unsupported dns_pool %q", rule.Name, rule.DNSPool)
+	if rule.DNSPool != "" && !validDNSPoolName(rule.DNSPool) {
+		return fmt.Errorf("rule %q: invalid dns_pool %q", rule.Name, rule.DNSPool)
 	}
 	if rule.Empty() {
 		return fmt.Errorf("rule %q: no matchers configured", rule.Name)
@@ -325,13 +325,26 @@ func validateRule(rule Rule) error {
 	return nil
 }
 
-func validDNSPool(pool string) bool {
-	switch pool {
-	case "cn", "overseas_private", "overseas_public":
-		return true
-	default:
-		return false
+func validDNSPoolName(pool string) bool {
+	return regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(pool)
+}
+
+func ValidateDNSPoolReferences(file File, poolNames []string) error {
+	valid := make(map[string]bool, len(poolNames))
+	for _, name := range poolNames {
+		valid[name] = true
 	}
+	for _, rule := range file.Rules {
+		if rule.DNSPool != "" && !valid[rule.DNSPool] {
+			return fmt.Errorf("rule %q: unknown dns_pool %q", rule.Name, rule.DNSPool)
+		}
+	}
+	for _, imp := range file.Imports {
+		if imp.DNSPool != "" && !valid[imp.DNSPool] {
+			return fmt.Errorf("import %q: unknown dns_pool %q", imp.Name, imp.DNSPool)
+		}
+	}
+	return nil
 }
 
 func (r Rule) Gateway() bool {
@@ -355,8 +368,8 @@ func loadImport(imp Import) ([]Rule, []Warning, error) {
 	if (imp.Exit == "") == (imp.DNSPool == "") {
 		return nil, nil, fmt.Errorf("import %q: exactly one of exit or dns_pool is required", imp.Name)
 	}
-	if imp.DNSPool != "" && !validDNSPool(imp.DNSPool) {
-		return nil, nil, fmt.Errorf("import %q: unsupported dns_pool %q", imp.Name, imp.DNSPool)
+	if imp.DNSPool != "" && !validDNSPoolName(imp.DNSPool) {
+		return nil, nil, fmt.Errorf("import %q: invalid dns_pool %q", imp.Name, imp.DNSPool)
 	}
 	data, err := readImportData(imp)
 	if err != nil {

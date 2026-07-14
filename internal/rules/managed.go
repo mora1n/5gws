@@ -20,6 +20,26 @@ func ManagedFile() File {
 	}
 }
 
+func DefaultNeteaseRule() Rule {
+	return Rule{
+		Name:         "netease-music",
+		DNSPool:      "cn_netease",
+		DomainSuffix: []string{"music.163.com", "music.126.net", "iplay.163.com", "look.163.com", "y.163.com"},
+	}
+}
+
+func EnsureOptionalDefaults(file File) File {
+	out := File{
+		Rules:   append([]Rule(nil), file.Rules...),
+		Imports: append([]Import(nil), file.Imports...),
+	}
+	defaultRule := DefaultNeteaseRule()
+	if !containsRuleName(out.Rules, defaultRule.Name) && !containsImportName(out.Imports, defaultRule.Name) {
+		out.Rules = append(out.Rules, defaultRule)
+	}
+	return out
+}
+
 func EnsureManaged(file File) File {
 	out := File{
 		Rules:   append([]Rule(nil), file.Rules...),

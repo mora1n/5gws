@@ -3,6 +3,7 @@ package rules
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -60,6 +61,19 @@ func TestEnsureManagedAddsDefaultsAndPreservesCustomRules(t *testing.T) {
 	}
 	if len(got.Imports) != 3 {
 		t.Fatalf("imports = %+v", got.Imports)
+	}
+}
+
+func TestOptionalNeteaseRuleIsNotManaged(t *testing.T) {
+	file := EnsureOptionalDefaults(ManagedFile())
+	defaultRule := DefaultNeteaseRule()
+	if !containsRuleName(file.Rules, defaultRule.Name) {
+		t.Fatalf("optional defaults did not add %q", defaultRule.Name)
+	}
+	file.Rules = slices.DeleteFunc(file.Rules, func(rule Rule) bool { return rule.Name == defaultRule.Name })
+	file = EnsureManaged(file)
+	if containsRuleName(file.Rules, defaultRule.Name) {
+		t.Fatalf("EnsureManaged restored optional rule %q", defaultRule.Name)
 	}
 }
 

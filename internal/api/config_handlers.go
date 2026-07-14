@@ -114,7 +114,7 @@ func (s *Server) importConfig(w http.ResponseWriter, r *http.Request) {
 		writeStatusError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	bundle.Config.ApplyDefaults()
+	bundle.ApplyDefaults()
 	if err := bundle.Config.Validate(); err != nil {
 		writeStatusError(w, http.StatusBadRequest, err.Error())
 		return

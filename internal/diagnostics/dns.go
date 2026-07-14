@@ -20,18 +20,10 @@ import (
 const dnsProbeTimeout = 2 * time.Second
 
 func probeDNSPools(ctx context.Context, cfg config.Config) []DNSResult {
-	pools := []struct {
-		name      string
-		queryName string
-		items     []string
-	}{
-		{"cn", "www.baidu.com.", cfg.DNS.UpstreamsCN},
-		{"overseas_private", "www.cloudflare.com.", cfg.DNS.UpstreamsOverseasPrivate},
-		{"overseas_public", "www.cloudflare.com.", cfg.DNS.UpstreamsOverseasPublic},
-	}
+	pools := cfg.DNS.Pools()
 	total := 0
 	for _, pool := range pools {
-		total += len(pool.items)
+		total += len(pool.Upstreams)
 	}
 	type indexedResult struct {
 		index  int
@@ -40,10 +32,10 @@ func probeDNSPools(ctx context.Context, cfg config.Config) []DNSResult {
 	results := make(chan indexedResult, total)
 	index := 0
 	for _, pool := range pools {
-		for _, upstream := range pool.items {
+		for _, upstream := range pool.Upstreams {
 			go func(index int, pool, queryName, upstream string) {
 				results <- indexedResult{index: index, result: probeDNSUpstream(ctx, pool, queryName, upstream)}
-			}(index, pool.name, pool.queryName, upstream)
+			}(index, pool.Name, dnsQueryName(pool.ProbeDomain), upstream)
 			index++
 		}
 	}
@@ -53,6 +45,10 @@ func probeDNSPools(ctx context.Context, cfg config.Config) []DNSResult {
 		out[item.index] = item.result
 	}
 	return out
+}
+
+func dnsQueryName(value string) string {
+	return strings.TrimSuffix(strings.TrimSpace(value), ".") + "."
 }
 
 func probeDNSUpstream(ctx context.Context, pool, queryName, upstream string) DNSResult {

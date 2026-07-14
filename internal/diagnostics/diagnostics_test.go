@@ -38,6 +38,25 @@ func TestProbeDNSUpstream(t *testing.T) {
 	}
 }
 
+func TestProbeDNSPoolsIncludesCustomPools(t *testing.T) {
+	packetConn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &dns.Server{PacketConn: packetConn, Handler: dns.HandlerFunc(answerHandler)}
+	go func() { _ = server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown() })
+	upstream := packetConn.LocalAddr().String()
+	cfg := config.Config{DNS: config.DNSConfig{
+		UpstreamsCN: []string{upstream}, UpstreamsOverseasPrivate: []string{upstream}, UpstreamsOverseasPublic: []string{upstream},
+		CustomPools: []config.DNSPoolConfig{{Name: "music_pool", ProbeDomain: "music.163.com", Upstreams: []string{upstream}}},
+	}}
+	results := probeDNSPools(context.Background(), cfg)
+	if len(results) != 4 || results[3].Pool != "music_pool" || results[3].Status != "ok" {
+		t.Fatalf("DNS pool results = %#v", results)
+	}
+}
+
 func TestQueryDOH(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Content-Type") != "application/dns-message" {

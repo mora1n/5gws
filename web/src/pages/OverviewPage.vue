@@ -55,10 +55,11 @@ const health = computed(() => {
   if (!props.diagnostics) return [{ label: '诊断', status: 'unknown', detail: '等待检测' }]
   const dns = props.diagnostics.dns || []
   const exits = props.diagnostics.exits || []
-  const rows = ['cn', 'overseas_private', 'overseas_public'].map(pool => {
+  const pools = [...new Set(dns.map(item => item.pool))]
+  const rows = pools.map(pool => {
     const items = dns.filter(item => item.pool === pool)
     const failed = items.filter(item => item.status !== 'ok')
-    return { label: `DNS · ${pool}`, status: items.length && !failed.length ? 'ok' : 'error', detail: items.length ? `${items.length - failed.length}/${items.length} 个上游可用` : '无检测结果' }
+    return { label: `DNS · ${poolLabel(pool)}`, status: items.length && !failed.length ? 'ok' : 'error', detail: items.length ? `${items.length - failed.length}/${items.length} 个上游可用` : '无检测结果' }
   })
   const dot = props.diagnostics.dot
   rows.unshift({ label: 'DoT', status: dot?.status || 'unknown', detail: dot?.status === 'ok' ? `${dot.latency_ms?.toFixed(1)} ms · 证书剩余 ${dot.days_remaining} 天` : dot?.error || '无检测结果' })
@@ -70,4 +71,5 @@ function formatBytes(value?: number) { if (value == null) return '-'; const unit
 function formatRate(value?: number) { return value == null ? '-' : `${formatBytes(value)}/s` }
 function statusClass(status: string) { return status === 'ok' ? 'badge-success' : status === 'warning' ? 'badge-warning' : status === 'unknown' ? 'badge-ghost' : 'badge-error' }
 function statusText(status: string) { return status === 'ok' ? '正常' : status === 'warning' ? '警告' : status === 'unknown' ? '待检测' : '异常' }
+function poolLabel(pool: string) { return pool === 'cn' ? '国内' : pool === 'overseas_private' ? '内网海外' : pool === 'overseas_public' ? '公网海外' : pool }
 </script>

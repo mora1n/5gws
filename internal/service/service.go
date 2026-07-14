@@ -112,11 +112,14 @@ func (s *Service) ValidateBundle(ctx context.Context, bundle store.Bundle) (Vali
 }
 
 func (s *Service) resolveBundle(ctx context.Context, bundle store.Bundle) (store.Bundle, []rules.Warning, error) {
-	bundle.Config.ApplyDefaults()
+	bundle.ApplyDefaults()
 	if err := bundle.Config.Validate(); err != nil {
 		return store.Bundle{}, nil, err
 	}
 	if err := rules.ValidateManaged(bundle.Rules); err != nil {
+		return store.Bundle{}, nil, err
+	}
+	if err := rules.ValidateDNSPoolReferences(bundle.Rules, bundle.Config.DNS.PoolNames()); err != nil {
 		return store.Bundle{}, nil, err
 	}
 	norm, err := s.resolver.Normalize(ctx, bundle.Rules)
@@ -141,7 +144,7 @@ func (s *Service) ApplyBundle(bundle store.Bundle) (ApplyResult, error) {
 	if err := rules.ValidateManaged(bundle.Rules); err != nil {
 		return ApplyResult{}, err
 	}
-	if active.Bundle.SameInput(bundle) {
+	if active.Bundle.SameInput(bundle) && active.Bundle.ResolvedLocalRulesCurrent() {
 		reset, err := s.store.ResetDraftToActive(ctx)
 		if err != nil {
 			return ApplyResult{}, err

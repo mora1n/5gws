@@ -15,7 +15,7 @@ const bundle = {
     panel: { listen: '127.0.0.1:19443', allowed_cidrs: ['127.0.0.0/8', '::1/128'] },
     network: { gateway_ip: '10.0.0.1', internal_cidr: '10.0.0.0/24', ingress_iface: 'wwan0', http_redirect_port: 18080, https_redirect_port: 18443, quic_redirect_port: 18443, tcp_redirect_port: 18082, haproxy_max_connections: 16384, quic_policy: 'reject', encrypted_dns_policy: 'reject' },
     routing: { fallback_exit: 'direct' },
-    dns: { binary: '/usr/local/bin/smartdns', dot_domain: 'dns.gateway.example.net', listen_udp: '0.0.0.0:1053', listen_tcp: '0.0.0.0:1053', listen_dot: '0.0.0.0:1853', listen_public_dot: '0.0.0.0:853', backend_resolvers: ['1.1.1.1:53', '8.8.8.8:53'], cert_dir: '/var/lib/5gws/ios', cert_file: '/etc/5gws/fullchain.pem', key_file: '/etc/5gws/privkey.pem', cache_size: 32768, upstreams_cn: ['223.5.5.5', '119.29.29.29'], upstreams_overseas_private: ['1.1.1.1'], upstreams_overseas_public: ['8.8.8.8'] },
+    dns: { binary: '/usr/local/bin/smartdns', dot_domain: 'dns.gateway.example.net', listen_udp: '0.0.0.0:1053', listen_tcp: '0.0.0.0:1053', listen_dot: '0.0.0.0:1853', listen_public_dot: '0.0.0.0:853', backend_resolvers: ['1.1.1.1:53', '8.8.8.8:53'], cert_dir: '/var/lib/5gws/ios', cert_file: '/etc/5gws/fullchain.pem', key_file: '/etc/5gws/privkey.pem', cache_size: 32768, upstreams_cn: ['223.5.5.5', '119.29.29.29'], upstreams_overseas_private: ['1.1.1.1'], upstreams_overseas_public: ['8.8.8.8'], custom_pools: [{ name: 'cn_netease', probe_domain: 'music.163.com', upstreams: ['117.50.10.10', '52.80.66.66', '210.2.4.8'] }] },
     logging: { level: 'info', access: true },
     ios: { enabled: true, listen: '0.0.0.0:8088', base_url: 'https://dns.gateway.example.net', organization: '5gws gateway operations', profile_identifier: 'dev.5gws.dot' },
     exits: [
@@ -25,7 +25,7 @@ const bundle = {
   },
   rules: {
     imports: [...managedRules.imports, { name: 'category-speedtest-global', type: 'sing-box', path: '', url: 'https://raw.githubusercontent.com/example/very/long/path/category-speedtest.json', format: '', exit: 'direct', dns_pool: '' }],
-    rules: [...managedRules.rules, { name: 'openai-and-related-services', exit: 'tokyo-shadowsocks-production-long-name', dns_pool: '', domain_suffix: ['openai.com', 'chatgpt.com', 'very-long-service-domain.example.net'] }],
+    rules: [...managedRules.rules, { name: 'netease-music', exit: '', dns_pool: 'cn_netease', domain_suffix: ['music.163.com', 'music.126.net', 'iplay.163.com', 'look.163.com', 'y.163.com'] }, { name: 'openai-and-related-services', exit: 'tokyo-shadowsocks-production-long-name', dns_pool: '', domain_suffix: ['openai.com', 'chatgpt.com', 'very-long-service-domain.example.net'] }],
   },
 }
 
@@ -64,6 +64,7 @@ async function mockAPI(page: Page, applyHandler?: (route: Route) => Promise<unkn
       { pool: 'cn', upstream: '223.5.5.5', protocol: 'udp', status: 'ok', latency_ms: 12.5, answers: ['1.2.3.4'] },
       { pool: 'overseas_private', upstream: '1.1.1.1', protocol: 'udp', status: 'ok', latency_ms: 8.2, answers: ['104.16.1.1'] },
       { pool: 'overseas_public', upstream: '8.8.8.8', protocol: 'udp', status: 'error', latency_ms: 2000, error: 'timeout' },
+      { pool: 'cn_netease', upstream: '117.50.10.10', protocol: 'udp', status: 'ok', latency_ms: 5.1, answers: ['106.38.195.163'] },
     ], exits: [
       { name: 'direct', type: 'direct', status: 'ok', egress_status: 'ok', egress_ip: '203.0.113.10', egress_latency_ms: 35.2 },
       { name: 'tokyo-shadowsocks-production-long-name', type: 'shadowsocks-rust', status: 'ok', upstream: 'edge.gateway.example.net:8388', upstream_status: 'ok', upstream_latency_ms: 21.1, egress_status: 'ok', egress_ip: '198.51.100.20', egress_latency_ms: 88.4 },
@@ -167,7 +168,8 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
 				await expect(defaults.getByTitle('删除')).toHaveCount(0)
 				const custom = page.locator('section').filter({ has: page.getByRole('heading', { name: '自定义本地规则' }) })
 				await expect(custom).toBeVisible()
-				await expect(custom.getByPlaceholder('名称')).toHaveValue('openai-and-related-services')
+				await expect(custom.getByPlaceholder('名称').first()).toHaveValue('netease-music')
+				await expect(custom.getByPlaceholder('名称').nth(1)).toHaveValue('openai-and-related-services')
 				await page.screenshot({ path: `/tmp/5gws-panel-${viewport.name}-rules.png`, fullPage: true })
 			}
 			if (heading === '日志') {
@@ -231,6 +233,29 @@ test('preflight and apply submit the visible configuration', async ({ page }) =>
 	await page.getByRole('button', { name: '应用' }).click()
 	await expect(page.getByText('配置没有变化')).toBeVisible()
 	expect(applyBody?.config.network.gateway_ip).toBe('10.0.0.2')
+})
+
+test('custom DNS pool rename updates rules and default pool deletion cascades', async ({ page }) => {
+	await mockAPI(page)
+	await page.goto('/')
+	await page.getByRole('button', { name: 'DNS 与网络', exact: true }).filter({ visible: true }).click()
+	const pools = page.locator('section').filter({ has: page.getByRole('heading', { name: '自定义 DNS 池' }) })
+	const name = pools.getByPlaceholder('custom_pool')
+	await name.fill('music_compat')
+	await name.blur()
+	await page.getByRole('button', { name: '规则', exact: true }).filter({ visible: true }).first().click()
+	const localRules = page.locator('section').filter({ has: page.getByRole('heading', { name: '自定义本地规则' }) })
+	const neteaseRow = localRules.getByPlaceholder('名称').first().locator('..')
+	await expect(localRules.getByPlaceholder('名称').first()).toHaveValue('netease-music')
+	await expect(neteaseRow.locator('select')).toHaveValue('pool:music_compat')
+
+	await page.getByRole('button', { name: 'DNS 与网络', exact: true }).filter({ visible: true }).click()
+	page.once('dialog', dialog => dialog.accept())
+	await pools.getByTitle('删除 DNS 池').click()
+	await expect(pools.getByPlaceholder('custom_pool')).toHaveCount(0)
+	await page.getByRole('button', { name: '规则', exact: true }).filter({ visible: true }).first().click()
+	await expect(localRules.getByPlaceholder('名称')).toHaveCount(1)
+	await expect(localRules.getByPlaceholder('名称')).toHaveValue('openai-and-related-services')
 })
 
 test('manual rule apply reconnects with the same operation ID', async ({ page }) => {

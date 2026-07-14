@@ -75,8 +75,8 @@ func (r Resolver) resolveImport(ctx context.Context, imp Import) ([]Rule, []Warn
 	if (imp.Exit == "") == (imp.DNSPool == "") {
 		return nil, nil, errors.New("exactly one of exit or dns_pool is required")
 	}
-	if imp.DNSPool != "" && !validDNSPool(imp.DNSPool) {
-		return nil, nil, fmt.Errorf("unsupported dns_pool %q", imp.DNSPool)
+	if imp.DNSPool != "" && !validDNSPoolName(imp.DNSPool) {
+		return nil, nil, fmt.Errorf("invalid dns_pool %q", imp.DNSPool)
 	}
 	data, err := r.read(ctx, imp)
 	if err != nil {

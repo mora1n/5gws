@@ -135,6 +135,37 @@ func TestConfigUsesFirstDomainRule(t *testing.T) {
 	}
 }
 
+func TestConfigRendersCustomDNSPool(t *testing.T) {
+	cfg := testConfig()
+	generated, err := Generate(cfg, rules.Normalized{Rules: []rules.Rule{{
+		Name: "netease-music", DNSPool: "cn_netease", DomainSuffix: []string{"music.163.com"},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"server 117.50.10.10 -group cn_netease -exclude-default-group",
+		"server https://doh-pure.onedns.net/dns-query -group cn_netease -exclude-default-group",
+		"nameserver /domain-set:pool_cn_netease/cn_netease",
+	} {
+		if !strings.Contains(generated.Config, want) {
+			t.Fatalf("missing %q in:\n%s", want, generated.Config)
+		}
+	}
+	if generated.Files["pool_cn_netease.list"] != "music.163.com\n" {
+		t.Fatalf("custom pool domain set = %q", generated.Files["pool_cn_netease.list"])
+	}
+}
+
+func TestConfigRejectsUnknownDNSPool(t *testing.T) {
+	_, err := Generate(testConfig(), rules.Normalized{Rules: []rules.Rule{{
+		Name: "unknown", DNSPool: "missing", DomainSuffix: []string{"example.com"},
+	}}})
+	if err == nil {
+		t.Fatal("expected unknown DNS pool to be rejected")
+	}
+}
+
 func TestConfigRejectsUnsupportedDNSRewriteMatchers(t *testing.T) {
 	_, err := Config(testConfig(), rules.Normalized{Rules: []rules.Rule{
 		{Name: "keyword", Exit: "ss1", DomainKeyword: []string{"openai"}},

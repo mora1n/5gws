@@ -51,8 +51,12 @@ func runInstall(args []string, input io.Reader, out io.Writer) error {
 			return err
 		}
 	}
-	ruleFile := rules.ManagedFile()
-	norm, err := (rules.Resolver{}).Normalize(context.Background(), ruleFile)
+	bundle := store.Bundle{Config: cfg, Rules: rules.EnsureOptionalDefaults(rules.ManagedFile())}
+	bundle.ApplyDefaults()
+	if err := rules.ValidateDNSPoolReferences(bundle.Rules, bundle.Config.DNS.PoolNames()); err != nil {
+		return err
+	}
+	norm, err := (rules.Resolver{}).Normalize(context.Background(), bundle.Rules)
 	if err != nil {
 		return err
 	}
@@ -70,7 +74,7 @@ func runInstall(args []string, input io.Reader, out io.Writer) error {
 	if err := ensureCertificate(cfg, out); err != nil {
 		return err
 	}
-	return initializeService(cfg, ruleFile, norm, out)
+	return initializeService(bundle.Config, bundle.Rules, norm, out)
 }
 
 type installOptions struct {

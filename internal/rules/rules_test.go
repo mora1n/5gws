@@ -92,6 +92,16 @@ func TestNormalizeRejectsAmbiguousRuleAction(t *testing.T) {
 	}
 }
 
+func TestValidateDNSPoolReferencesAcceptsCustomPool(t *testing.T) {
+	file := File{Rules: []Rule{{Name: "music", DNSPool: "music_pool", DomainSuffix: []string{"music.163.com"}}}}
+	if err := ValidateDNSPoolReferences(file, []string{"cn", "music_pool"}); err != nil {
+		t.Fatalf("custom pool rejected: %v", err)
+	}
+	if err := ValidateDNSPoolReferences(file, []string{"cn"}); err == nil {
+		t.Fatal("expected unknown custom pool to be rejected")
+	}
+}
+
 func TestNormalizeRejectsImportWithoutAction(t *testing.T) {
 	dir := t.TempDir()
 	singPath := filepath.Join(dir, "sing.json")

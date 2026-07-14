@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -59,20 +60,27 @@ type RoutingConfig struct {
 }
 
 type DNSConfig struct {
-	Binary                   string   `toml:"binary" json:"binary"`
-	DOTDomain                string   `toml:"dot_domain" json:"dot_domain"`
-	ListenUDP                string   `toml:"listen_udp" json:"listen_udp"`
-	ListenTCP                string   `toml:"listen_tcp" json:"listen_tcp"`
-	ListenDOT                string   `toml:"listen_dot" json:"listen_dot"`
-	ListenPublicDOT          string   `toml:"listen_public_dot" json:"listen_public_dot"`
-	BackendResolvers         []string `toml:"backend_resolvers" json:"backend_resolvers"`
-	CertDir                  string   `toml:"cert_dir" json:"cert_dir"`
-	CertFile                 string   `toml:"cert_file" json:"cert_file"`
-	KeyFile                  string   `toml:"key_file" json:"key_file"`
-	CacheSize                int      `toml:"cache_size" json:"cache_size"`
-	UpstreamsCN              []string `toml:"upstreams_cn" json:"upstreams_cn"`
-	UpstreamsOverseasPrivate []string `toml:"upstreams_overseas_private" json:"upstreams_overseas_private"`
-	UpstreamsOverseasPublic  []string `toml:"upstreams_overseas_public" json:"upstreams_overseas_public"`
+	Binary                   string          `toml:"binary" json:"binary"`
+	DOTDomain                string          `toml:"dot_domain" json:"dot_domain"`
+	ListenUDP                string          `toml:"listen_udp" json:"listen_udp"`
+	ListenTCP                string          `toml:"listen_tcp" json:"listen_tcp"`
+	ListenDOT                string          `toml:"listen_dot" json:"listen_dot"`
+	ListenPublicDOT          string          `toml:"listen_public_dot" json:"listen_public_dot"`
+	BackendResolvers         []string        `toml:"backend_resolvers" json:"backend_resolvers"`
+	CertDir                  string          `toml:"cert_dir" json:"cert_dir"`
+	CertFile                 string          `toml:"cert_file" json:"cert_file"`
+	KeyFile                  string          `toml:"key_file" json:"key_file"`
+	CacheSize                int             `toml:"cache_size" json:"cache_size"`
+	UpstreamsCN              []string        `toml:"upstreams_cn" json:"upstreams_cn"`
+	UpstreamsOverseasPrivate []string        `toml:"upstreams_overseas_private" json:"upstreams_overseas_private"`
+	UpstreamsOverseasPublic  []string        `toml:"upstreams_overseas_public" json:"upstreams_overseas_public"`
+	CustomPools              []DNSPoolConfig `toml:"custom_pools" json:"custom_pools"`
+}
+
+type DNSPoolConfig struct {
+	Name        string   `toml:"name" json:"name"`
+	ProbeDomain string   `toml:"probe_domain" json:"probe_domain"`
+	Upstreams   []string `toml:"upstreams" json:"upstreams"`
 }
 
 type LoggingConfig struct {
@@ -243,6 +251,9 @@ func (c *Config) ApplyDefaults() {
 			"22.22.22.22",
 		}
 	}
+	if c.DNS.CustomPools == nil {
+		c.DNS.CustomPools = []DNSPoolConfig{DefaultNeteaseDNSPool()}
+	}
 	for i := range c.Exits {
 		exit := &c.Exits[i]
 		if exit.Type != "shadowsocks-rust" {
@@ -255,6 +266,38 @@ func (c *Config) ApplyDefaults() {
 			exit.TimeoutSeconds = 300
 		}
 	}
+}
+
+func DefaultNeteaseDNSPool() DNSPoolConfig {
+	return DNSPoolConfig{
+		Name:        "cn_netease",
+		ProbeDomain: "music.163.com",
+		Upstreams: []string{
+			"117.50.10.10",
+			"52.80.66.66",
+			"https://doh-pure.onedns.net/dns-query",
+			"tls://dot-pure.onedns.net",
+			"210.2.4.8",
+		},
+	}
+}
+
+func (d DNSConfig) Pools() []DNSPoolConfig {
+	pools := []DNSPoolConfig{
+		{Name: "cn", ProbeDomain: "www.baidu.com", Upstreams: d.UpstreamsCN},
+		{Name: "overseas_private", ProbeDomain: "www.cloudflare.com", Upstreams: d.UpstreamsOverseasPrivate},
+		{Name: "overseas_public", ProbeDomain: "www.cloudflare.com", Upstreams: d.UpstreamsOverseasPublic},
+	}
+	return append(pools, d.CustomPools...)
+}
+
+func (d DNSConfig) PoolNames() []string {
+	pools := d.Pools()
+	names := make([]string, 0, len(pools))
+	for _, pool := range pools {
+		names = append(names, pool.Name)
+	}
+	return names
 }
 
 func defaultCNUpstreams() []string {
@@ -480,6 +523,29 @@ func validateDNS(d DNSConfig) error {
 	}
 	if len(d.UpstreamsCN) == 0 || len(d.UpstreamsOverseasPrivate) == 0 || len(d.UpstreamsOverseasPublic) == 0 {
 		return errors.New("dns.upstreams_cn, dns.upstreams_overseas_private, and dns.upstreams_overseas_public are required")
+	}
+	seen := map[string]bool{"cn": true, "overseas_private": true, "overseas_public": true}
+	for _, pool := range d.CustomPools {
+		if !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(pool.Name) {
+			return fmt.Errorf("dns custom pool name is invalid: %q", pool.Name)
+		}
+		if seen[pool.Name] {
+			return fmt.Errorf("duplicate dns pool name: %s", pool.Name)
+		}
+		seen[pool.Name] = true
+		if err := validateDomainName("dns.custom_pools.probe_domain", pool.ProbeDomain); err != nil {
+			return err
+		}
+		if len(pool.Upstreams) == 0 {
+			return fmt.Errorf("dns custom pool %q requires at least one upstream", pool.Name)
+		}
+	}
+	for _, pool := range d.Pools() {
+		for _, upstream := range pool.Upstreams {
+			if strings.TrimSpace(upstream) == "" || strings.IndexFunc(upstream, unicode.IsSpace) >= 0 {
+				return fmt.Errorf("dns pool %q contains an invalid upstream %q", pool.Name, upstream)
+			}
+		}
 	}
 	return nil
 }

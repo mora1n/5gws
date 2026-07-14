@@ -11,7 +11,7 @@
       </header>
       <div v-if="message" class="mx-4 mt-4 flex items-center gap-2 border px-3 py-2 text-sm sm:mx-6" :class="error ? 'border-error/40 bg-error/10 text-error' : 'border-success/40 bg-success/10 text-success'"><LoaderCircle v-if="applying" class="size-4 shrink-0 animate-spin" /><CircleAlert v-else-if="error" class="size-4 shrink-0" /><CircleCheck v-else class="size-4 shrink-0" /><span class="break-all">{{ message }}</span><button class="btn btn-ghost btn-square btn-xs ml-auto" title="关闭" @click="message = ''"><X class="size-4" /></button></div>
       <OverviewPage v-if="page === 'overview'" :dashboard="dashboard" :metrics="metrics" :diagnostics="diagnostics" :runtime-busy="runtimeBusy" @refresh="refresh" @refresh-runtime="refreshRuntime" />
-      <NetworkPage v-else-if="page === 'network' && bundle" v-model:bundle="bundle" :diagnostics="diagnostics" :diagnostics-busy="diagnosticsBusy" @refresh-diagnostics="runDiagnostics('network')" />
+      <NetworkPage v-else-if="page === 'network' && bundle" v-model:bundle="bundle" :diagnostics="diagnostics" :diagnostics-busy="diagnosticsBusy" @refresh-diagnostics="runDiagnostics('network')" @error="show($event, true)" />
       <RulesPage v-else-if="page === 'rules' && bundle && managedRules" v-model:bundle="bundle" :managed="managedRules" :active-revision="dashboard?.active_revision || 0" @error="show($event, true)" />
       <ExitsPage v-else-if="page === 'exits' && bundle" v-model:bundle="bundle" :diagnostics="diagnostics" :diagnostics-busy="diagnosticsBusy" @refresh-diagnostics="runDiagnostics('exits')" />
       <LogsPage v-else-if="page === 'logs'" @error="show($event, true)" />

@@ -9,6 +9,7 @@ import (
 
 	"github.com/morain/5gws/internal/config"
 	"github.com/morain/5gws/internal/rules"
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestRevisionLifecycle(t *testing.T) {
@@ -123,6 +124,80 @@ func TestRevisionReadAppliesNewConfigDefaults(t *testing.T) {
 	if got == nil || *got != config.DefaultHAProxyMaxConnections {
 		t.Fatalf("haproxy max connections = %v, want %d", got, config.DefaultHAProxyMaxConnections)
 	}
+}
+
+func TestRevisionReadSeedsOptionalDNSPoolAndRuleOnlyWhenFieldIsMissing(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "5gws.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	bundle := validBundle()
+	bundle.Config.DNS.CustomPools = []config.DNSPoolConfig{}
+	active, err := s.Initialize(ctx, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload []byte
+	if err := s.db.QueryRowContext(ctx, "SELECT payload_json FROM revisions WHERE id = ?", active.ID).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	var value map[string]any
+	if err := json.Unmarshal(payload, &value); err != nil {
+		t.Fatal(err)
+	}
+	dnsConfig := value["config"].(map[string]any)["dns"].(map[string]any)
+	delete(dnsConfig, "custom_pools")
+	payload, err = json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE revisions SET payload_json = ? WHERE id = ?", payload, active.ID); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := s.Active(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.Bundle.Config.DNS.CustomPools) != 1 || !containsRule(reloaded.Bundle.Rules.Rules, "netease-music") {
+		t.Fatalf("legacy defaults not seeded: pools=%#v rules=%#v", reloaded.Bundle.Config.DNS.CustomPools, reloaded.Bundle.Rules.Rules)
+	}
+
+	reloaded.Bundle.Config.DNS.CustomPools = []config.DNSPoolConfig{}
+	reloaded.Bundle.Rules.Rules = nil
+	saved, err := s.SaveDraft(ctx, reloaded.Bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Bundle.Config.DNS.CustomPools == nil || len(saved.Bundle.Config.DNS.CustomPools) != 0 || containsRule(saved.Bundle.Rules.Rules, "netease-music") {
+		t.Fatalf("explicit deletion was restored: pools=%#v rules=%#v", saved.Bundle.Config.DNS.CustomPools, saved.Bundle.Rules.Rules)
+	}
+}
+
+func TestBundleTOMLPreservesExplicitlyEmptyCustomPools(t *testing.T) {
+	bundle := validBundle()
+	bundle.Config.DNS.CustomPools = []config.DNSPoolConfig{}
+	data, err := toml.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Bundle
+	if err := toml.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Config.DNS.CustomPools == nil || len(decoded.Config.DNS.CustomPools) != 0 {
+		t.Fatalf("custom pools = %#v after TOML round trip\n%s", decoded.Config.DNS.CustomPools, data)
+	}
+}
+
+func containsRule(items []rules.Rule, name string) bool {
+	for _, item := range items {
+		if item.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRevisionReadAcceptsLegacyUppercaseRulesJSON(t *testing.T) {

@@ -27,9 +27,21 @@ func (b Bundle) Normalized() rules.Normalized {
 	return rules.Normalized{Rules: b.ResolvedRules}
 }
 
-func (b Bundle) SameInput(other Bundle) bool {
+func (b *Bundle) ApplyDefaults() {
+	seedOptionalDefaults := b.Config.DNS.CustomPools == nil
 	b.Config.ApplyDefaults()
-	other.Config.ApplyDefaults()
+	if seedOptionalDefaults {
+		b.Rules = rules.EnsureOptionalDefaults(b.Rules)
+	}
+}
+
+func (b Bundle) ResolvedLocalRulesCurrent() bool {
+	return len(b.ResolvedRules) >= len(b.Rules.Rules) && reflect.DeepEqual(b.ResolvedRules[:len(b.Rules.Rules)], b.Rules.Rules)
+}
+
+func (b Bundle) SameInput(other Bundle) bool {
+	b.ApplyDefaults()
+	other.ApplyDefaults()
 	return reflect.DeepEqual(b.Config, other.Config) && reflect.DeepEqual(b.Rules, other.Rules)
 }
 
@@ -133,7 +145,7 @@ func (s *Store) migrate() error {
 }
 
 func (s *Store) Initialize(ctx context.Context, bundle Bundle) (Revision, error) {
-	bundle.Config.ApplyDefaults()
+	bundle.ApplyDefaults()
 	if err := bundle.Config.Validate(); err != nil {
 		return Revision{}, err
 	}
@@ -178,7 +190,7 @@ func (s *Store) revisionFor(ctx context.Context, column string) (Revision, error
 }
 
 func (s *Store) SaveDraft(ctx context.Context, bundle Bundle) (Revision, error) {
-	bundle.Config.ApplyDefaults()
+	bundle.ApplyDefaults()
 	if err := bundle.Config.Validate(); err != nil {
 		return Revision{}, err
 	}
@@ -286,7 +298,7 @@ func scanRevision(row scanner) (Revision, error) {
 	if err := json.Unmarshal(payload, &rev.Bundle); err != nil {
 		return Revision{}, fmt.Errorf("decode revision %d: %w", rev.ID, err)
 	}
-	rev.Bundle.Config.ApplyDefaults()
+	rev.Bundle.ApplyDefaults()
 	rev.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", created)
 	rev.ActiveAt, _ = time.Parse("2006-01-02 15:04:05", active)
 	return rev, nil

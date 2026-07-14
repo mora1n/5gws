@@ -103,6 +103,9 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 		"9.9.9.9:53",
 		"22.22.22.22:53",
 	})
+	if len(cfg.DNS.CustomPools) != 1 || cfg.DNS.CustomPools[0].Name != "cn_netease" {
+		t.Fatalf("custom pools = %#v, want default Netease pool", cfg.DNS.CustomPools)
+	}
 	if cfg.Routing.FallbackExit != "direct" {
 		t.Fatalf("fallback_exit = %q, want direct", cfg.Routing.FallbackExit)
 	}
@@ -123,6 +126,30 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	}
 	if cfg.Network.HAProxyMaxConnections == nil || *cfg.Network.HAProxyMaxConnections != DefaultHAProxyMaxConnections {
 		t.Fatalf("haproxy_max_connections = %v, want %d", cfg.Network.HAProxyMaxConnections, DefaultHAProxyMaxConnections)
+	}
+}
+
+func TestApplyDefaultsPreservesExplicitlyEmptyCustomPools(t *testing.T) {
+	cfg := validConfig()
+	cfg.DNS.CustomPools = []DNSPoolConfig{}
+	cfg.ApplyDefaults()
+	if cfg.DNS.CustomPools == nil || len(cfg.DNS.CustomPools) != 0 {
+		t.Fatalf("custom pools = %#v, want explicit empty slice", cfg.DNS.CustomPools)
+	}
+}
+
+func TestValidateCustomDNSPools(t *testing.T) {
+	for _, mutate := range []func(*Config){
+		func(cfg *Config) { cfg.DNS.CustomPools[0].Name = "cn" },
+		func(cfg *Config) { cfg.DNS.CustomPools[0].Name = "bad pool" },
+		func(cfg *Config) { cfg.DNS.CustomPools[0].ProbeDomain = "" },
+		func(cfg *Config) { cfg.DNS.CustomPools[0].Upstreams = nil },
+	} {
+		cfg := validConfig()
+		mutate(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("expected invalid custom DNS pool to be rejected: %#v", cfg.DNS.CustomPools)
+		}
 	}
 }
 

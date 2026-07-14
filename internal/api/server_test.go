@@ -489,7 +489,7 @@ func testServerIOS(t *testing.T, iosEnabled bool) (*Server, func()) {
 	cfg.ApplyDefaults()
 	rule := rules.Rule{Name: "test", Exit: "direct", DomainSuffix: []string{"example.com"}}
 	file := rules.EnsureManaged(rules.File{Rules: []rules.Rule{rule}})
-	active, err := state.Initialize(context.Background(), store.Bundle{Config: cfg, Rules: file, ResolvedRules: []rules.Rule{rule}})
+	active, err := state.Initialize(context.Background(), store.Bundle{Config: cfg, Rules: file, ResolvedRules: append([]rules.Rule(nil), file.Rules...)})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -96,7 +96,13 @@ const customImports = computed(() => bundle.value.rules.imports!.filter(item => 
 const summary = ref<ActiveRules | null>(null)
 const loading = ref(false)
 const activeTime = computed(() => summary.value?.active_at ? new Date(summary.value.active_at).toLocaleString() : '-')
-const targets = computed(() => ['pool:cn', 'pool:overseas_private', 'pool:overseas_public', ...bundle.value.config.exits.map(exit => `exit:${exit.name}`)])
+const targets = computed(() => [
+  'pool:cn',
+  'pool:overseas_private',
+  'pool:overseas_public',
+  ...bundle.value.config.dns.custom_pools.map(pool => `pool:${pool.name}`),
+  ...bundle.value.config.exits.map(exit => `exit:${exit.name}`),
+])
 
 function target(item: Rule | ImportRule) { return item.exit ? `exit:${item.exit}` : `pool:${item.dns_pool}` }
 async function loadActiveRules() {

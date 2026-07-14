@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/miekg/dns"
@@ -25,8 +26,17 @@ type dnsReadinessProbe struct {
 }
 
 func dnsReadinessProbes(cfg config.Config) []dnsReadinessProbe {
-	probes := make([]dnsReadinessProbe, 0, 4)
-	for _, domain := range []string{"example.com.", "www.baidu.com."} {
+	domains := []string{"example.com.", "www.baidu.com."}
+	seen := map[string]bool{"example.com.": true, "www.baidu.com.": true}
+	for _, pool := range cfg.DNS.CustomPools {
+		domain := dnsFQDN(pool.ProbeDomain)
+		if !seen[domain] {
+			domains = append(domains, domain)
+			seen[domain] = true
+		}
+	}
+	probes := make([]dnsReadinessProbe, 0, len(domains)*2)
+	for _, domain := range domains {
 		probes = append(probes, dnsReadinessProbe{
 			label:   "internal DNS TCP",
 			address: loopbackAddress(cfg.DNS.ListenTCP),
@@ -35,7 +45,7 @@ func dnsReadinessProbes(cfg config.Config) []dnsReadinessProbe {
 		})
 	}
 	if cfg.DNS.ListenPublicDOT != "" {
-		for _, domain := range []string{"example.com.", "www.baidu.com."} {
+		for _, domain := range domains {
 			probes = append(probes, dnsReadinessProbe{
 				label:   "public DoT",
 				address: loopbackAddress(cfg.DNS.ListenPublicDOT),
@@ -49,6 +59,10 @@ func dnsReadinessProbes(cfg config.Config) []dnsReadinessProbe {
 		}
 	}
 	return probes
+}
+
+func dnsFQDN(value string) string {
+	return strings.TrimSuffix(strings.TrimSpace(value), ".") + "."
 }
 
 func waitDNSReadiness(ctx context.Context, probe dnsReadinessProbe) error {

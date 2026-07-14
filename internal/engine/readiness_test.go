@@ -24,13 +24,14 @@ func TestDNSReadinessProbesUseLoopbackAndDOTDomain(t *testing.T) {
 		ListenTCP:       "0.0.0.0:1053",
 		ListenPublicDOT: "0.0.0.0:853",
 		DOTDomain:       "dot.example.com",
+		CustomPools:     []config.DNSPoolConfig{{Name: "cn_netease", ProbeDomain: "music.163.com", Upstreams: []string{"117.50.10.10"}}},
 	}}
 	probes := dnsReadinessProbes(cfg)
-	if len(probes) != 4 || probes[0].address != "127.0.0.1:1053" || probes[1].domain != "www.baidu.com." {
+	if len(probes) != 6 || probes[0].address != "127.0.0.1:1053" || probes[1].domain != "www.baidu.com." || probes[2].domain != "music.163.com." {
 		t.Fatalf("DNS readiness probes = %#v", probes)
 	}
-	if probes[2].network != "tcp-tls" || probes[2].address != "127.0.0.1:853" || probes[2].tlsConfig.ServerName != "dot.example.com" || probes[3].domain != "www.baidu.com." {
-		t.Fatalf("DoT readiness probes = %#v", probes[2:])
+	if probes[3].network != "tcp-tls" || probes[3].address != "127.0.0.1:853" || probes[3].tlsConfig.ServerName != "dot.example.com" || probes[5].domain != "music.163.com." {
+		t.Fatalf("DoT readiness probes = %#v", probes[3:])
 	}
 }
 

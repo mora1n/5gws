@@ -122,6 +122,35 @@ func TestApplyBundleNoChangeDoesNotTouchRuntime(t *testing.T) {
 	}
 }
 
+func TestApplyBundleRebuildsStaleResolvedLocalRules(t *testing.T) {
+	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	bundle := serviceBundle()
+	bundle.Rules = rules.EnsureOptionalDefaults(bundle.Rules)
+	active, err := state.Initialize(context.Background(), bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &testRuntime{}
+	result, err := newTestService(t, state, runtime).ApplyBundle(active.Bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || runtime.prepareCalls != 1 || runtime.applyCalls != 1 {
+		t.Fatalf("result=%+v runtime=%+v", result, runtime)
+	}
+	current, err := state.Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current.Bundle.ResolvedLocalRulesCurrent() {
+		t.Fatalf("resolved local rules remain stale: %#v", current.Bundle.ResolvedRules)
+	}
+}
+
 func TestApplyBundleRejectsMissingManagedRuleBeforeRuntime(t *testing.T) {
 	state, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
@@ -225,5 +254,5 @@ func serviceBundle() store.Bundle {
 	cfg.ApplyDefaults()
 	rule := rules.Rule{Name: "test", Exit: "direct", DomainSuffix: []string{"example.com"}}
 	file := rules.EnsureManaged(rules.File{Rules: []rules.Rule{rule}})
-	return store.Bundle{Config: cfg, Rules: file, ResolvedRules: []rules.Rule{rule}}
+	return store.Bundle{Config: cfg, Rules: file, ResolvedRules: append([]rules.Rule(nil), file.Rules...)}
 }
