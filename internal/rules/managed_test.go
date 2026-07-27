@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestFileJSONUsesLowercaseKeys(t *testing.T) {
@@ -64,16 +66,36 @@ func TestEnsureManagedAddsDefaultsAndPreservesCustomRules(t *testing.T) {
 	}
 }
 
-func TestOptionalNeteaseRuleIsNotManaged(t *testing.T) {
+func TestOptionalDefaultRulesAreNotManaged(t *testing.T) {
 	file := EnsureOptionalDefaults(ManagedFile())
-	defaultRule := DefaultNeteaseRule()
-	if !containsRuleName(file.Rules, defaultRule.Name) {
-		t.Fatalf("optional defaults did not add %q", defaultRule.Name)
+	defaults := []Rule{DefaultNeteaseRule(), DefaultUnicomRule()}
+	for _, defaultRule := range defaults {
+		if !containsRuleName(file.Rules, defaultRule.Name) {
+			t.Fatalf("optional defaults did not add %q", defaultRule.Name)
+		}
 	}
-	file.Rules = slices.DeleteFunc(file.Rules, func(rule Rule) bool { return rule.Name == defaultRule.Name })
+	file.Rules = slices.DeleteFunc(file.Rules, func(rule Rule) bool {
+		return rule.Name == defaults[0].Name || rule.Name == defaults[1].Name
+	})
 	file = EnsureManaged(file)
-	if containsRuleName(file.Rules, defaultRule.Name) {
-		t.Fatalf("EnsureManaged restored optional rule %q", defaultRule.Name)
+	for _, defaultRule := range defaults {
+		if containsRuleName(file.Rules, defaultRule.Name) {
+			t.Fatalf("EnsureManaged restored optional rule %q", defaultRule.Name)
+		}
+	}
+}
+
+func TestManagedFileSurvivesTOMLRoundTrip(t *testing.T) {
+	data, err := toml.Marshal(ManagedFile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded File
+	if err := toml.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateManaged(decoded); err != nil {
+		t.Fatalf("validate managed rules after TOML round trip: %v\n%s", err, data)
 	}
 }
 
@@ -83,12 +105,14 @@ func TestValidateManagedRejectsMissingModifiedDuplicateAndCollision(t *testing.T
 		t.Fatalf("valid managed file rejected: %v", err)
 	}
 	tests := map[string]File{
-		"missing":   {Rules: valid.Rules[:1], Imports: valid.Imports},
-		"modified":  {Rules: append([]Rule(nil), valid.Rules...), Imports: append([]Import(nil), valid.Imports...)},
-		"duplicate": {Rules: append(append([]Rule(nil), valid.Rules...), valid.Rules[1]), Imports: valid.Imports},
-		"collision": {Rules: append(append([]Rule(nil), valid.Rules...), Rule{Name: "gfw", Exit: "direct", DomainSuffix: []string{"example.com"}}), Imports: valid.Imports},
+		"missing":         {Rules: valid.Rules[:1], Imports: valid.Imports},
+		"modified-rule":   {Rules: append([]Rule(nil), valid.Rules...), Imports: valid.Imports},
+		"modified-import": {Rules: valid.Rules, Imports: append([]Import(nil), valid.Imports...)},
+		"duplicate":       {Rules: append(append([]Rule(nil), valid.Rules...), valid.Rules[1]), Imports: valid.Imports},
+		"collision":       {Rules: append(append([]Rule(nil), valid.Rules...), Rule{Name: "gfw", Exit: "direct", DomainSuffix: []string{"example.com"}}), Imports: valid.Imports},
 	}
-	tests["modified"].Imports[0].URL = "https://example.com/changed.json"
+	tests["modified-rule"].Rules[1].Exit = ""
+	tests["modified-import"].Imports[0].URL = "https://example.com/changed.json"
 	for name, file := range tests {
 		t.Run(name, func(t *testing.T) {
 			if err := ValidateManaged(file); err == nil {

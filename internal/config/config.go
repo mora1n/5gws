@@ -233,6 +233,7 @@ func (c *Config) ApplyDefaults() {
 	} else if usesLegacyCNUpstreams(c.DNS.UpstreamsCN) {
 		c.DNS.UpstreamsCN = appendMissing(c.DNS.UpstreamsCN, defaultCNUpstreams())
 	}
+	c.DNS.UpstreamsCN = migrateDOTPubUpstream(c.DNS.UpstreamsCN)
 	if len(c.DNS.UpstreamsOverseasPrivate) == 0 {
 		c.DNS.UpstreamsOverseasPrivate = []string{
 			"22.22.22.22",
@@ -252,7 +253,7 @@ func (c *Config) ApplyDefaults() {
 		}
 	}
 	if c.DNS.CustomPools == nil {
-		c.DNS.CustomPools = []DNSPoolConfig{DefaultNeteaseDNSPool()}
+		c.DNS.CustomPools = []DNSPoolConfig{DefaultNeteaseDNSPool(), DefaultUnicomDNSPool()}
 	}
 	for i := range c.Exits {
 		exit := &c.Exits[i]
@@ -279,6 +280,14 @@ func DefaultNeteaseDNSPool() DNSPoolConfig {
 			"tls://dot-pure.onedns.net",
 			"210.2.4.8",
 		},
+	}
+}
+
+func DefaultUnicomDNSPool() DNSPoolConfig {
+	return DNSPoolConfig{
+		Name:        "cn_unicom",
+		ProbeDomain: "img.client.10010.com",
+		Upstreams:   []string{"180.76.76.76", "1.2.4.8"},
 	}
 }
 
@@ -315,7 +324,7 @@ func defaultCNUpstreams() []string {
 		"tls://dns.alidns.com",
 		"119.29.29.29",
 		"https://doh.pub/dns-query",
-		"tls://dot.pub",
+		"tls://1.12.12.12",
 		"180.184.1.1",
 		"180.184.2.2",
 		"https://doh.360.cn/dns-query",
@@ -325,6 +334,24 @@ func defaultCNUpstreams() []string {
 		"1.2.4.8",
 		"210.2.4.8",
 	}
+}
+
+func migrateDOTPubUpstream(values []string) []string {
+	const old = "tls://dot.pub"
+	const replacement = "tls://1.12.12.12"
+	replacementPresent := slices.Contains(values, replacement)
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != old {
+			out = append(out, value)
+			continue
+		}
+		if !replacementPresent {
+			out = append(out, replacement)
+			replacementPresent = true
+		}
+	}
+	return out
 }
 
 func usesLegacyCNUpstreams(values []string) bool {

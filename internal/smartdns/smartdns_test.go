@@ -43,7 +43,7 @@ func TestConfigRendersAddressRules(t *testing.T) {
 		"server tls://dns.alidns.com -group cn -exclude-default-group",
 		"server 119.29.29.29 -group cn -exclude-default-group",
 		"server https://doh.pub/dns-query -group cn -exclude-default-group",
-		"server tls://dot.pub -group cn -exclude-default-group",
+		"server tls://1.12.12.12 -group cn -exclude-default-group",
 		"server 180.184.1.1 -group cn -exclude-default-group",
 		"server https://doh.360.cn/dns-query -group cn -exclude-default-group",
 		"server tls://dot.360.cn -group cn -exclude-default-group",
@@ -137,9 +137,10 @@ func TestConfigUsesFirstDomainRule(t *testing.T) {
 
 func TestConfigRendersCustomDNSPool(t *testing.T) {
 	cfg := testConfig()
-	generated, err := Generate(cfg, rules.Normalized{Rules: []rules.Rule{{
-		Name: "netease-music", DNSPool: "cn_netease", DomainSuffix: []string{"music.163.com"},
-	}}})
+	generated, err := Generate(cfg, rules.Normalized{Rules: []rules.Rule{
+		{Name: "netease-music", DNSPool: "cn_netease", DomainSuffix: []string{"music.163.com"}},
+		{Name: "china-unicom-app", DNSPool: "cn_unicom", DomainSuffix: []string{"10010.com", "chinaunicom.cn", "chinaunicom.com"}},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +148,9 @@ func TestConfigRendersCustomDNSPool(t *testing.T) {
 		"server 117.50.10.10 -group cn_netease -exclude-default-group",
 		"server https://doh-pure.onedns.net/dns-query -group cn_netease -exclude-default-group",
 		"nameserver /domain-set:pool_cn_netease/cn_netease",
+		"server 180.76.76.76 -group cn_unicom -exclude-default-group",
+		"server 1.2.4.8 -group cn_unicom -exclude-default-group",
+		"nameserver /domain-set:pool_cn_unicom/cn_unicom",
 	} {
 		if !strings.Contains(generated.Config, want) {
 			t.Fatalf("missing %q in:\n%s", want, generated.Config)
@@ -154,6 +158,9 @@ func TestConfigRendersCustomDNSPool(t *testing.T) {
 	}
 	if generated.Files["pool_cn_netease.list"] != "music.163.com\n" {
 		t.Fatalf("custom pool domain set = %q", generated.Files["pool_cn_netease.list"])
+	}
+	if generated.Files["pool_cn_unicom.list"] != "10010.com\nchinaunicom.cn\nchinaunicom.com\n" {
+		t.Fatalf("Unicom pool domain set = %q", generated.Files["pool_cn_unicom.list"])
 	}
 }
 

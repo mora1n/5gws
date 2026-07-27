@@ -79,7 +79,7 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 		"180.76.76.76", "101.226.4.6", "218.30.118.6",
 		"114.114.114.114", "114.114.115.115", "117.50.10.10", "52.80.66.66",
 		"223.5.5.5", "223.6.6.6", "https://dns.alidns.com/dns-query", "tls://dns.alidns.com",
-		"119.29.29.29", "https://doh.pub/dns-query", "tls://dot.pub",
+		"119.29.29.29", "https://doh.pub/dns-query", "tls://1.12.12.12",
 		"180.184.1.1", "180.184.2.2", "https://doh.360.cn/dns-query", "tls://dot.360.cn",
 		"https://doh-pure.onedns.net/dns-query", "tls://dot-pure.onedns.net", "1.2.4.8", "210.2.4.8",
 	})
@@ -103,8 +103,8 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 		"9.9.9.9:53",
 		"22.22.22.22:53",
 	})
-	if len(cfg.DNS.CustomPools) != 1 || cfg.DNS.CustomPools[0].Name != "cn_netease" {
-		t.Fatalf("custom pools = %#v, want default Netease pool", cfg.DNS.CustomPools)
+	if len(cfg.DNS.CustomPools) != 2 || cfg.DNS.CustomPools[0].Name != "cn_netease" || cfg.DNS.CustomPools[1].Name != "cn_unicom" {
+		t.Fatalf("custom pools = %#v, want default Netease and Unicom pools", cfg.DNS.CustomPools)
 	}
 	if cfg.Routing.FallbackExit != "direct" {
 		t.Fatalf("fallback_exit = %q, want direct", cfg.Routing.FallbackExit)
@@ -232,6 +232,17 @@ func TestApplyDefaultsMigratesOnlyLegacyCNUpstreams(t *testing.T) {
 	cfg.DNS.UpstreamsCN = append([]string(nil), custom...)
 	cfg.ApplyDefaults()
 	assertEqualStrings(t, cfg.DNS.UpstreamsCN, custom)
+}
+
+func TestApplyDefaultsMigratesInvalidDOTPubUpstream(t *testing.T) {
+	cfg := validConfig()
+	cfg.DNS.UpstreamsCN = []string{"192.0.2.53", "tls://dot.pub", "198.51.100.53"}
+	cfg.ApplyDefaults()
+	assertEqualStrings(t, cfg.DNS.UpstreamsCN, []string{"192.0.2.53", "tls://1.12.12.12", "198.51.100.53"})
+
+	cfg.DNS.UpstreamsCN = []string{"tls://dot.pub", "tls://1.12.12.12"}
+	cfg.ApplyDefaults()
+	assertEqualStrings(t, cfg.DNS.UpstreamsCN, []string{"tls://1.12.12.12"})
 }
 
 func TestValidateRejectsInvalidQUICPolicy(t *testing.T) {

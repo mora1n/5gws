@@ -160,7 +160,9 @@ func TestRevisionReadSeedsOptionalDNSPoolAndRuleOnlyWhenFieldIsMissing(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(reloaded.Bundle.Config.DNS.CustomPools) != 1 || !containsRule(reloaded.Bundle.Rules.Rules, "netease-music") {
+	if len(reloaded.Bundle.Config.DNS.CustomPools) != 2 ||
+		!containsRule(reloaded.Bundle.Rules.Rules, "netease-music") ||
+		!containsRule(reloaded.Bundle.Rules.Rules, "china-unicom-app") {
 		t.Fatalf("legacy defaults not seeded: pools=%#v rules=%#v", reloaded.Bundle.Config.DNS.CustomPools, reloaded.Bundle.Rules.Rules)
 	}
 
@@ -170,7 +172,8 @@ func TestRevisionReadSeedsOptionalDNSPoolAndRuleOnlyWhenFieldIsMissing(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Bundle.Config.DNS.CustomPools == nil || len(saved.Bundle.Config.DNS.CustomPools) != 0 || containsRule(saved.Bundle.Rules.Rules, "netease-music") {
+	if saved.Bundle.Config.DNS.CustomPools == nil || len(saved.Bundle.Config.DNS.CustomPools) != 0 ||
+		containsRule(saved.Bundle.Rules.Rules, "netease-music") || containsRule(saved.Bundle.Rules.Rules, "china-unicom-app") {
 		t.Fatalf("explicit deletion was restored: pools=%#v rules=%#v", saved.Bundle.Config.DNS.CustomPools, saved.Bundle.Rules.Rules)
 	}
 }

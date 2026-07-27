@@ -2,7 +2,7 @@ package rules
 
 import (
 	"fmt"
-	"reflect"
+	"slices"
 )
 
 func ManagedFile() File {
@@ -28,14 +28,23 @@ func DefaultNeteaseRule() Rule {
 	}
 }
 
+func DefaultUnicomRule() Rule {
+	return Rule{
+		Name:         "china-unicom-app",
+		DNSPool:      "cn_unicom",
+		DomainSuffix: []string{"10010.com", "chinaunicom.cn", "chinaunicom.com"},
+	}
+}
+
 func EnsureOptionalDefaults(file File) File {
 	out := File{
 		Rules:   append([]Rule(nil), file.Rules...),
 		Imports: append([]Import(nil), file.Imports...),
 	}
-	defaultRule := DefaultNeteaseRule()
-	if !containsRuleName(out.Rules, defaultRule.Name) && !containsImportName(out.Imports, defaultRule.Name) {
-		out.Rules = append(out.Rules, defaultRule)
+	for _, defaultRule := range []Rule{DefaultNeteaseRule(), DefaultUnicomRule()} {
+		if !containsRuleName(out.Rules, defaultRule.Name) && !containsImportName(out.Imports, defaultRule.Name) {
+			out.Rules = append(out.Rules, defaultRule)
+		}
 	}
 	return out
 }
@@ -66,7 +75,7 @@ func ValidateManaged(file File) error {
 		if len(matches) != 1 || containsImportName(file.Imports, expected.Name) {
 			return fmt.Errorf("managed rule %q must appear exactly once as a local rule", expected.Name)
 		}
-		if !reflect.DeepEqual(matches[0], expected) {
+		if !equalRule(matches[0], expected) {
 			return fmt.Errorf("managed rule %q is read-only and must not be modified", expected.Name)
 		}
 	}
@@ -75,11 +84,18 @@ func ValidateManaged(file File) error {
 		if len(matches) != 1 || containsRuleName(file.Rules, expected.Name) {
 			return fmt.Errorf("managed import %q must appear exactly once as a remote import", expected.Name)
 		}
-		if !reflect.DeepEqual(matches[0], expected) {
+		if matches[0] != expected {
 			return fmt.Errorf("managed import %q is read-only and must not be modified", expected.Name)
 		}
 	}
 	return nil
+}
+
+func equalRule(left, right Rule) bool {
+	return left.Name == right.Name && left.Exit == right.Exit && left.DNSPool == right.DNSPool &&
+		slices.Equal(left.Domain, right.Domain) && slices.Equal(left.DomainSuffix, right.DomainSuffix) &&
+		slices.Equal(left.DomainKeyword, right.DomainKeyword) && slices.Equal(left.DomainRegex, right.DomainRegex) &&
+		slices.Equal(left.IPCIDR, right.IPCIDR) && slices.Equal(left.RuleSet, right.RuleSet)
 }
 
 func containsRuleName(items []Rule, name string) bool {

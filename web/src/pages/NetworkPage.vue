@@ -84,11 +84,11 @@ function removePool(pool: DNSPool) {
   const localRules = (bundle.value.rules.rules || []).filter(rule => rule.dns_pool === pool.name)
   const imports = (bundle.value.rules.imports || []).filter(item => item.dns_pool === pool.name)
   if (!localRules.length && !imports.length) return deletePool(pool)
-  if (imports.length || localRules.length !== 1 || !isDefaultNeteaseRule(localRules[0], pool.name)) {
+  if (imports.length || localRules.length !== 1 || !isOptionalDefaultRule(localRules[0], pool.name)) {
     emit('error', `DNS 池 ${pool.name} 仍被规则引用，请先重新分配这些规则`)
     return
   }
-  if (!window.confirm(`删除 DNS 池 ${pool.name} 及其默认网易云规则？`)) return
+  if (!window.confirm(`删除 DNS 池 ${pool.name} 及其默认规则？`)) return
   const index = bundle.value.rules.rules!.indexOf(localRules[0])
   if (index >= 0) bundle.value.rules.rules!.splice(index, 1)
   deletePool(pool)
@@ -97,10 +97,14 @@ function deletePool(pool: DNSPool) {
   const index = bundle.value.config.dns.custom_pools.indexOf(pool)
   if (index >= 0) bundle.value.config.dns.custom_pools.splice(index, 1)
 }
-function isDefaultNeteaseRule(rule: Rule, poolName: string) {
-  const domains = ['music.163.com', 'music.126.net', 'iplay.163.com', 'look.163.com', 'y.163.com']
-  return rule.name === 'netease-music' && !rule.exit && rule.dns_pool === poolName &&
-    JSON.stringify(rule.domain_suffix || []) === JSON.stringify(domains) &&
+function isOptionalDefaultRule(rule: Rule, poolName: string) {
+  const defaults = [
+    { name: 'netease-music', domains: ['music.163.com', 'music.126.net', 'iplay.163.com', 'look.163.com', 'y.163.com'] },
+    { name: 'china-unicom-app', domains: ['10010.com', 'chinaunicom.cn', 'chinaunicom.com'] },
+  ]
+  const expected = defaults.find(item => item.name === rule.name)
+  return !!expected && !rule.exit && rule.dns_pool === poolName &&
+    JSON.stringify(rule.domain_suffix || []) === JSON.stringify(expected.domains) &&
     !rule.domain?.length && !rule.domain_keyword?.length && !rule.domain_regex?.length && !rule.ip_cidr?.length && !rule.rule_set?.length
 }
 </script>
