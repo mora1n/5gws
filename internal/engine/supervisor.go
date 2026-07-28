@@ -227,13 +227,14 @@ func (s *Supervisor) startGroup(operationCtx context.Context, root string, bundl
 			}
 		}(spec[0], cmd)
 	}
+	gatewayReady := make(chan struct{}, 1)
 	group.wait.Add(1)
 	go func() {
 		defer group.wait.Done()
 		log.SetOutput(io.MultiWriter(os.Stderr, s.logs))
 		compiled, err := rules.Compile(bundle.Normalized())
 		if err == nil {
-			err = quic.RunCompiled(ctx, bundle.Config, bundle.Normalized(), compiled)
+			err = quic.RunCompiledReady(ctx, bundle.Config, bundle.Normalized(), compiled, gatewayReady)
 		}
 		if ctx.Err() == nil {
 			if err == nil {
@@ -245,34 +246,33 @@ func (s *Supervisor) startGroup(operationCtx context.Context, root string, bundl
 			}
 		}
 	}()
-	time.Sleep(250 * time.Millisecond)
-	select {
-	case err := <-group.done:
+	readinessCtx, cancelReadiness := context.WithTimeout(operationCtx, readinessTimeout)
+	defer cancelReadiness()
+	err := waitReadiness(readinessCtx, group.done, func(ctx context.Context) error {
+		select {
+		case <-gatewayReady:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		for _, address := range readinessAddresses(bundle) {
+			if err := waitTCP(ctx, address, readinessTimeout); err != nil {
+				return err
+			}
+		}
+		for _, probe := range dnsReadinessProbes(bundle.Config) {
+			if err := waitDNSReadiness(ctx, probe); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		if stopErr := stopGroup(group); stopErr != nil {
 			return nil, errors.Join(err, stopErr)
 		}
 		return nil, err
-	default:
-		readinessCtx, cancelReadiness := context.WithTimeout(operationCtx, readinessTimeout)
-		defer cancelReadiness()
-		for _, address := range readinessAddresses(bundle) {
-			if err := waitTCP(readinessCtx, address, readinessTimeout); err != nil {
-				if stopErr := stopGroup(group); stopErr != nil {
-					return nil, errors.Join(err, stopErr)
-				}
-				return nil, err
-			}
-		}
-		for _, probe := range dnsReadinessProbes(bundle.Config) {
-			if err := waitDNSReadiness(readinessCtx, probe); err != nil {
-				if stopErr := stopGroup(group); stopErr != nil {
-					return nil, errors.Join(err, stopErr)
-				}
-				return nil, err
-			}
-		}
-		return group, nil
 	}
+	return group, nil
 }
 
 func managedCommands(root string, bundle store.Bundle) [][]string {
@@ -293,7 +293,6 @@ func readinessAddresses(bundle store.Bundle) []string {
 		loopbackAddress(bundle.Config.DNS.ListenTCP),
 		net.JoinHostPort("127.0.0.1", fmt.Sprint(bundle.Config.Network.HTTPRedirectPort)),
 		net.JoinHostPort("127.0.0.1", fmt.Sprint(bundle.Config.Network.HTTPSRedirectPort)),
-		net.JoinHostPort("127.0.0.1", fmt.Sprint(bundle.Config.Network.TCPRedirectPort)),
 	}
 	for _, exit := range bundle.Config.Exits {
 		if exit.Type == "shadowsocks-rust" {
@@ -301,6 +300,31 @@ func readinessAddresses(bundle store.Bundle) []string {
 		}
 	}
 	return addresses
+}
+
+func waitReadiness(ctx context.Context, done <-chan error, check func(context.Context) error) error {
+	checkCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		result <- check(checkCtx)
+	}()
+	select {
+	case err := <-done:
+		return err
+	case err := <-result:
+		if err != nil {
+			return err
+		}
+		select {
+		case err := <-done:
+			return err
+		default:
+			return nil
+		}
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func loopbackAddress(address string) string {

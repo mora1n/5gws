@@ -46,10 +46,15 @@ func Run(ctx context.Context, cfg config.Config, norm rules.Normalized) error {
 }
 
 func RunCompiled(ctx context.Context, cfg config.Config, norm rules.Normalized, compiled *rules.Compiled) error {
+	return RunCompiledReady(ctx, cfg, norm, compiled, make(chan struct{}, 1))
+}
+
+func RunCompiledReady(ctx context.Context, cfg config.Config, norm rules.Normalized, compiled *rules.Compiled, ready chan<- struct{}) error {
 	tcpGateway, err := listenTCPGatewayCompiled(cfg, compiled)
 	if err != nil {
 		return err
 	}
+	defer tcpGateway.close()
 	errCh := make(chan error, 2)
 	var gw *Gateway
 	if cfg.Network.QUICPolicy == "proxy" {
@@ -57,6 +62,7 @@ func RunCompiled(ctx context.Context, cfg config.Config, norm rules.Normalized, 
 		if err != nil {
 			return err
 		}
+		defer gw.close()
 		go gw.gc(ctx)
 		go func() {
 			errCh <- gw.serve(ctx)
@@ -71,13 +77,10 @@ func RunCompiled(ctx context.Context, cfg config.Config, norm rules.Normalized, 
 		}
 	})
 	defer stopClose()
-	defer tcpGateway.close()
-	if gw != nil {
-		defer gw.close()
-	}
 	go func() {
 		errCh <- tcpGateway.serve(ctx)
 	}()
+	ready <- struct{}{}
 	return <-errCh
 }
 
