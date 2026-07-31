@@ -150,11 +150,27 @@ test('SS exit name supports sequential editing while local SOCKS stays internal'
 
 	await addedRow.locator('td').nth(2).locator('input').first().fill('osaka.example.net')
 	const details = page.locator('section').filter({ has: page.getByRole('heading', { name: 'osaka-ss', exact: true }) })
-	await details.locator('input[type="password"]').fill('MDEyMzQ1Njc4OWFiY2RlZg==')
+	const method = details.getByLabel('加密方法')
+	await expect(method).toHaveValue('2022-blake3-aes-128-gcm')
+	await expect(method.locator('optgroup')).toHaveCount(2)
+	await expect(method.locator('optgroup').nth(0)).toHaveAttribute('label', 'AEAD 2022')
+	await expect(method.locator('optgroup').nth(1)).toHaveAttribute('label', 'AEAD')
+	expect(await method.locator('option').evaluateAll(options => options.map(option => (option as HTMLOptionElement).value))).toEqual([
+		'2022-blake3-aes-128-gcm',
+		'2022-blake3-aes-256-gcm',
+		'2022-blake3-chacha20-poly1305',
+		'aes-128-gcm',
+		'aes-256-gcm',
+		'chacha20-ietf-poly1305',
+	])
+	const password = details.locator('input[type="password"]')
+	await password.fill('MDEyMzQ1Njc4OWFiY2RlZg==')
+	await method.selectOption('aes-256-gcm')
+	await expect(password).toHaveValue('MDEyMzQ1Njc4OWFiY2RlZg==')
 	await page.getByRole('button', { name: '应用', exact: true }).click()
 	await expect(page.getByText('配置已应用，共 10023 条规则')).toBeVisible()
 	const added = submitted?.config.exits.find(exit => exit.name === 'osaka-ss')
-	expect(added).toEqual(expect.objectContaining({ listen_address: '127.0.0.1', listen_port: 1081 }))
+	expect(added).toEqual(expect.objectContaining({ method: 'aes-256-gcm', listen_address: '127.0.0.1', listen_port: 1081 }))
 })
 
 for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'mobile', width: 390, height: 844 }]) {

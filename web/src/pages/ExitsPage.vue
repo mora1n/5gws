@@ -20,11 +20,15 @@
     <tr v-for="(exit, index) in bundle.config.exits" :key="index"><td><input v-model.trim="exit.name" class="input input-sm w-36" :disabled="exit.type === 'direct'" /></td><td><span class="badge badge-ghost">{{ exit.type }}</span></td><td><span v-if="exit.type === 'direct'">-</span><div v-else class="flex gap-2"><input v-model.trim="exit.server" class="input input-sm w-40" /><input v-model.number="exit.server_port" type="number" class="input input-sm w-24" /></div></td><td><button v-if="exit.type !== 'direct'" class="btn btn-ghost btn-square btn-sm text-error" title="删除" @click="bundle.config.exits.splice(index, 1)"><Trash2 class="size-4" /></button></td></tr>
   </tbody></table></div></section>
   <section v-for="(exit, index) in ssExits" :key="index" class="panel-section"><h3 class="mb-4 font-semibold">{{ exit.name }}</h3><div class="grid gap-4 md:grid-cols-2">
-    <label><span class="field-label">加密方法</span><input v-model.trim="exit.method" class="input w-full" /></label><label><span class="field-label">密码</span><input v-model="exit.password" type="password" class="input w-full" /></label>
+    <label><span class="field-label">加密方法</span><select v-model="exit.method" class="select w-full"><optgroup v-for="group in cipherGroups" :key="group.label" :label="group.label"><option v-for="method in group.methods" :key="method" :value="method">{{ method }}</option></optgroup></select></label><label><span class="field-label">密码</span><input v-model="exit.password" type="password" class="input w-full" /></label>
   </div></section>
 </template>
 <script setup lang="ts">
 import { computed } from 'vue'; import { Plus, RefreshCw, Trash2 } from '@lucide/vue'; import type { Bundle, Diagnostics } from '@/types'
+const cipherGroups = [
+  { label: 'AEAD 2022', methods: ['2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305'] },
+  { label: 'AEAD', methods: ['aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305'] },
+] as const
 const bundle = defineModel<Bundle>('bundle', { required: true }); const props = defineProps<{ diagnostics: Diagnostics | null; diagnosticsBusy: boolean }>(); defineEmits<{ 'refresh-diagnostics': [] }>(); const ssExits = computed(() => bundle.value.config.exits.filter(e => e.type === 'shadowsocks-rust'))
 const checkedAt = computed(() => props.diagnostics ? `检测于 ${new Date(props.diagnostics.checked_at).toLocaleString()}` : '尚未检测')
 function add() { let port = 1080; const used = new Set(bundle.value.config.exits.map(e => e.listen_port)); while (used.has(port)) port++; bundle.value.config.exits.push({ name: `ss${ssExits.value.length + 1}`, type: 'shadowsocks-rust', fwmark: 0, server: '', server_port: 8388, method: '2022-blake3-aes-128-gcm', password: '', username: 'default', listen_address: '127.0.0.1', listen_port: port, tcp: true, udp: true, timeout_seconds: 300 }) }
