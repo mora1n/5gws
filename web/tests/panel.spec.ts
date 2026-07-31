@@ -122,6 +122,41 @@ test('DNS upstream editor preserves Enter and submits normalized lines', async (
 	])
 })
 
+test('SS exit name supports sequential editing while local SOCKS stays internal', async ({ page }) => {
+	let submitted: typeof bundle | undefined
+	await mockAPI(page, async route => {
+		submitted = route.request().postDataJSON() as typeof bundle
+		return route.fulfill({
+			status: 200,
+			contentType: 'application/json',
+			body: JSON.stringify({ id: 'test', status: 'succeeded', changed: true, revision_id: 8, rule_count: 10023, warnings: null }),
+		})
+	})
+	await page.goto('/')
+	await page.getByRole('button', { name: '出口', exact: true }).filter({ visible: true }).click()
+	await expect(page.getByText('本地 SOCKS', { exact: true })).toHaveCount(0)
+	await expect(page.getByText('本地地址', { exact: true })).toHaveCount(0)
+	await expect(page.getByText('本地端口', { exact: true })).toHaveCount(0)
+
+	await page.getByRole('button', { name: 'SS 出口', exact: true }).click()
+	const exits = page.getByRole('table').filter({ has: page.getByText('名称', { exact: true }) })
+	const addedRow = exits.locator('tbody tr').last()
+	const name = addedRow.locator('td').first().locator('input')
+	await expect(name).toHaveValue('ss2')
+	await name.fill('')
+	await name.pressSequentially('osaka-ss')
+	await expect(name).toHaveValue('osaka-ss')
+	await expect(name).toBeFocused()
+
+	await addedRow.locator('td').nth(2).locator('input').first().fill('osaka.example.net')
+	const details = page.locator('section').filter({ has: page.getByRole('heading', { name: 'osaka-ss', exact: true }) })
+	await details.locator('input[type="password"]').fill('MDEyMzQ1Njc4OWFiY2RlZg==')
+	await page.getByRole('button', { name: '应用', exact: true }).click()
+	await expect(page.getByText('配置已应用，共 10023 条规则')).toBeVisible()
+	const added = submitted?.config.exits.find(exit => exit.name === 'osaka-ss')
+	expect(added).toEqual(expect.objectContaining({ listen_address: '127.0.0.1', listen_port: 1081 }))
+})
+
 for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'mobile', width: 390, height: 844 }]) {
   test(`${viewport.name} panel pages fit the viewport`, async ({ page }) => {
     const consoleErrors: string[] = []
