@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
@@ -47,13 +49,63 @@ func TestValidateRequiresShadowsocksFields(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsInvalid2022Key(t *testing.T) {
-	cfg := validConfig()
-	cfg.Exits = append(cfg.Exits, validSSExit())
-	cfg.Exits[1].Method = "2022-blake3-aes-128-gcm"
-	cfg.Exits[1].Password = "change-me"
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected invalid 2022 key to be rejected")
+func TestValidateAccepts2022KeysAndIdentityChains(t *testing.T) {
+	tests := []struct {
+		name, method string
+		keyBytes     int
+		segments     int
+	}{
+		{"aes128-user", "2022-blake3-aes-128-gcm", 16, 1},
+		{"aes128-pair", "2022-blake3-aes-128-gcm", 16, 2},
+		{"aes128-chain", "2022-blake3-aes-128-gcm", 16, 3},
+		{"aes256-user", "2022-blake3-aes-256-gcm", 32, 1},
+		{"aes256-pair", "2022-blake3-aes-256-gcm", 32, 2},
+		{"aes256-chain", "2022-blake3-aes-256-gcm", 32, 3},
+		{"chacha20-user", "2022-blake3-chacha20-poly1305", 32, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			exit := validSSExit()
+			exit.Method = tt.method
+			exit.Password = ssKeyChain(tt.keyBytes, tt.segments)
+			cfg.Exits = append(cfg.Exits, exit)
+			if err := cfg.Validate(); err != nil {
+				t.Fatalf("valid key rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsInvalid2022KeyParts(t *testing.T) {
+	key32, key24 := encodedSSKey('a', 32), encodedSSKey('b', 24)
+	tests := []struct {
+		name, method, password string
+		want                   []string
+	}{
+		{"short-identity", "2022-blake3-aes-256-gcm", key24 + ":" + key32, []string{"identity key 1", "24 bytes", "want 32", "normally 44", "openssl rand -base64 32"}},
+		{"short-user", "2022-blake3-aes-256-gcm", key32 + ":" + key24, []string{"user key", "24 bytes", "want 32", "openssl rand -base64 32"}},
+		{"invalid-user-base64", "2022-blake3-aes-256-gcm", key32 + ":not-base64", []string{"user key", "must be base64", "openssl rand -base64 32"}},
+		{"empty-identity", "2022-blake3-aes-256-gcm", ":" + key32, []string{"identity key 1 is empty", "openssl rand -base64 32"}},
+		{"empty-user", "2022-blake3-aes-128-gcm", encodedSSKey('a', 16) + ":", []string{"user key is empty", "openssl rand -base64 16"}},
+		{"chacha20-chain", "2022-blake3-chacha20-poly1305", key32 + ":" + key32, []string{"single base64 key", "colon-separated identity keys are unsupported"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			exit := validSSExit()
+			exit.Method, exit.Password = tt.method, tt.password
+			cfg.Exits = append(cfg.Exits, exit)
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("expected invalid key to be rejected")
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q does not contain %q", err, want)
+				}
+			}
+		})
 	}
 }
 
@@ -323,14 +375,29 @@ func TestValidateRejectsDisabledTCPAndUDP(t *testing.T) {
 func TestValidatePasswordErrorIncludesOpenSSLHint(t *testing.T) {
 	cfg := validConfig()
 	exit := validSSExit()
+	exit.Method = "2022-blake3-aes-256-gcm"
 	exit.Password = ""
 	cfg.Exits = append(cfg.Exits, exit)
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("expected missing password to be rejected")
 	}
-	if !strings.Contains(err.Error(), "openssl rand -base64 16") {
+	if !strings.Contains(err.Error(), "openssl rand -base64 32") {
 		t.Fatalf("password error lacks openssl hint: %v", err)
+	}
+}
+
+func TestValidateOrdinaryAEADPasswordErrorHasNoKeyHint(t *testing.T) {
+	cfg := validConfig()
+	exit := validSSExit()
+	exit.Password = ""
+	cfg.Exits = append(cfg.Exits, exit)
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "password is required") {
+		t.Fatalf("unexpected password error: %v", err)
+	}
+	if strings.Contains(err.Error(), "openssl rand") {
+		t.Fatalf("ordinary AEAD password error has key hint: %v", err)
 	}
 }
 
@@ -367,6 +434,18 @@ func validSSExit() ExitConfig {
 		ListenPort:     1080,
 		TimeoutSeconds: 300,
 	}
+}
+
+func ssKeyChain(keyBytes, segments int) string {
+	keys := make([]string, segments)
+	for i := range keys {
+		keys[i] = encodedSSKey(byte('a'+i), keyBytes)
+	}
+	return strings.Join(keys, ":")
+}
+
+func encodedSSKey(value byte, keyBytes int) string {
+	return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{value}, keyBytes))
 }
 
 func validConfig() Config {

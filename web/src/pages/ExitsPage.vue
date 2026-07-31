@@ -20,16 +20,26 @@
     <tr v-for="(exit, index) in bundle.config.exits" :key="index"><td><input v-model.trim="exit.name" class="input input-sm w-36" :disabled="exit.type === 'direct'" /></td><td><span class="badge badge-ghost">{{ exit.type }}</span></td><td><span v-if="exit.type === 'direct'">-</span><div v-else class="flex gap-2"><input v-model.trim="exit.server" class="input input-sm w-40" /><input v-model.number="exit.server_port" type="number" class="input input-sm w-24" /></div></td><td><button v-if="exit.type !== 'direct'" class="btn btn-ghost btn-square btn-sm text-error" title="删除" @click="bundle.config.exits.splice(index, 1)"><Trash2 class="size-4" /></button></td></tr>
   </tbody></table></div></section>
   <section v-for="(exit, index) in ssExits" :key="index" class="panel-section"><h3 class="mb-4 font-semibold">{{ exit.name }}</h3><div class="grid gap-4 md:grid-cols-2">
-    <label><span class="field-label">加密方法</span><select v-model="exit.method" class="select w-full"><optgroup v-for="group in cipherGroups" :key="group.label" :label="group.label"><option v-for="method in group.methods" :key="method" :value="method">{{ method }}</option></optgroup></select></label><label><span class="field-label">密码</span><input v-model="exit.password" type="password" class="input w-full" /></label>
+    <label><span class="field-label">加密方法</span><select v-model="exit.method" class="select w-full"><optgroup v-for="group in cipherGroups" :key="group.label" :label="group.label"><option v-for="method in group.methods" :key="method" :value="method">{{ method }}</option></optgroup></select></label>
+    <div><span class="field-label">密码</span><div class="join flex w-full"><input v-model="exit.password" :type="passwordVisible(exit) ? 'text' : 'password'" aria-label="密码" class="input join-item min-w-0 flex-1" /><button type="button" class="btn btn-square join-item" :title="passwordVisible(exit) ? '隐藏密码' : '显示密码'" @click="togglePassword(exit)"><EyeOff v-if="passwordVisible(exit)" class="size-4" /><Eye v-else class="size-4" /></button></div><div v-if="keyHint(exit.method)" class="mt-1 text-xs text-base-content/55">{{ keyHint(exit.method) }}</div></div>
   </div></section>
 </template>
 <script setup lang="ts">
-import { computed } from 'vue'; import { Plus, RefreshCw, Trash2 } from '@lucide/vue'; import type { Bundle, Diagnostics } from '@/types'
+import { computed, ref } from 'vue'; import { Eye, EyeOff, Plus, RefreshCw, Trash2 } from '@lucide/vue'; import type { Bundle, Diagnostics, Exit } from '@/types'
 const cipherGroups = [
   { label: 'AEAD 2022', methods: ['2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305'] },
   { label: 'AEAD', methods: ['aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305'] },
 ] as const
 const bundle = defineModel<Bundle>('bundle', { required: true }); const props = defineProps<{ diagnostics: Diagnostics | null; diagnosticsBusy: boolean }>(); defineEmits<{ 'refresh-diagnostics': [] }>(); const ssExits = computed(() => bundle.value.config.exits.filter(e => e.type === 'shadowsocks-rust'))
+const visiblePasswords = ref(new Set<Exit>())
 const checkedAt = computed(() => props.diagnostics ? `检测于 ${new Date(props.diagnostics.checked_at).toLocaleString()}` : '尚未检测')
+function passwordVisible(exit: Exit) { return visiblePasswords.value.has(exit) }
+function togglePassword(exit: Exit) { const next = new Set(visiblePasswords.value); if (next.has(exit)) next.delete(exit); else next.add(exit); visiblePasswords.value = next }
+function keyHint(method: string) {
+  if (method === '2022-blake3-aes-128-gcm') return '支持 iPSK[:...]:uPSK，每段为 Base64 编码的 16 字节密钥（通常 24 个字符）；生成：openssl rand -base64 16'
+  if (method === '2022-blake3-aes-256-gcm') return '支持 iPSK[:...]:uPSK，每段为 Base64 编码的 32 字节密钥（通常 44 个字符）；生成：openssl rand -base64 32'
+  if (method === '2022-blake3-chacha20-poly1305') return '仅支持单段 Base64 编码的 32 字节密钥（通常 44 个字符）；生成：openssl rand -base64 32'
+  return ''
+}
 function add() { let port = 1080; const used = new Set(bundle.value.config.exits.map(e => e.listen_port)); while (used.has(port)) port++; bundle.value.config.exits.push({ name: `ss${ssExits.value.length + 1}`, type: 'shadowsocks-rust', fwmark: 0, server: '', server_port: 8388, method: '2022-blake3-aes-128-gcm', password: '', username: 'default', listen_address: '127.0.0.1', listen_port: port, tcp: true, udp: true, timeout_seconds: 300 }) }
 </script>

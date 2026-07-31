@@ -650,8 +650,8 @@ func validateShadowsocksExit(exit ExitConfig) error {
 	if exit.ServerPort <= 0 || exit.ServerPort > 65535 {
 		return fmt.Errorf("exit %q: server_port is invalid", exit.Name)
 	}
-	if exit.Password == "" {
-		return fmt.Errorf("exit %q: password is required; generate one with: openssl rand -base64 16", exit.Name)
+	if exit.Password == "" && !strings.HasPrefix(exit.Method, "2022-blake3-") {
+		return fmt.Errorf("exit %q: password is required", exit.Name)
 	}
 	if err := validateSSKey(exit.Method, exit.Password); err != nil {
 		return fmt.Errorf("exit %q: %w", exit.Name, err)
@@ -669,21 +669,59 @@ func validateShadowsocksExit(exit ExitConfig) error {
 }
 
 func validateSSKey(method, password string) error {
-	if !strings.HasPrefix(method, "2022-blake3-") {
+	keyBytes, identityChain, ok := ss2022KeySpec(method)
+	if !ok {
 		return nil
 	}
-	key, err := base64.StdEncoding.DecodeString(password)
-	if err != nil {
-		return fmt.Errorf("password must be a base64 key for %s; generate one with: openssl rand -base64 16", method)
+	if !identityChain && strings.Contains(password, ":") {
+		return fmt.Errorf("password for %s must be a single base64 key; colon-separated identity keys are unsupported", method)
 	}
-	want := 32
-	if strings.Contains(method, "aes-128-gcm") {
-		want = 16
+	parts := []string{password}
+	if identityChain {
+		parts = strings.Split(password, ":")
 	}
-	if len(key) != want {
-		return fmt.Errorf("password key length for %s is %d bytes, want %d; generate one with: openssl rand -base64 %d", method, len(key), want, want)
+	for i, part := range parts {
+		if err := validateSSKeyPart(method, ssKeyPartName(i, len(parts)), part, keyBytes); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func ss2022KeySpec(method string) (keyBytes int, identityChain, ok bool) {
+	switch method {
+	case "2022-blake3-aes-128-gcm":
+		return 16, true, true
+	case "2022-blake3-aes-256-gcm":
+		return 32, true, true
+	case "2022-blake3-chacha20-poly1305":
+		return 32, false, true
+	default:
+		return 0, false, false
+	}
+}
+
+func validateSSKeyPart(method, name, value string, want int) error {
+	hint := fmt.Sprintf("openssl rand -base64 %d", want)
+	encodedLen := base64.StdEncoding.EncodedLen(want)
+	if value == "" {
+		return fmt.Errorf("password %s is empty for %s; generate one with: %s", name, method, hint)
+	}
+	key, err := base64.StdEncoding.DecodeString(value)
+	if err != nil {
+		return fmt.Errorf("password %s must be base64 for %s and decode to %d bytes (normally %d base64 characters); generate one with: %s", name, method, want, encodedLen, hint)
+	}
+	if len(key) != want {
+		return fmt.Errorf("password %s for %s decodes to %d bytes, want %d bytes (normally %d base64 characters); generate one with: %s", name, method, len(key), want, encodedLen, hint)
+	}
+	return nil
+}
+
+func ssKeyPartName(index, count int) string {
+	if index == count-1 {
+		return "user key"
+	}
+	return fmt.Sprintf("identity key %d", index+1)
 }
 
 func (l LoggingConfig) AccessEnabled() bool {

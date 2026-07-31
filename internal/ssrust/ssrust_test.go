@@ -8,13 +8,14 @@ import (
 )
 
 func TestConfigRendersSupportedFieldsOnly(t *testing.T) {
+	password := "MTIzNDU2Nzg5MGFiY2RlZg==:ZmVkY2JhMDk4NzY1NDMyMQ=="
 	out, err := Config(config.ExitConfig{
 		Name:           "ss1",
 		Type:           "shadowsocks-rust",
 		Server:         "198.51.100.10",
 		ServerPort:     8388,
 		Method:         "2022-blake3-aes-128-gcm",
-		Password:       "MTIzNDU2Nzg5MGFiY2RlZg==",
+		Password:       password,
 		Username:       "default",
 		ListenAddress:  "127.0.0.1",
 		ListenPort:     1080,
@@ -32,6 +33,9 @@ func TestConfigRendersSupportedFieldsOnly(t *testing.T) {
 	}
 	if parsed["method"] != "2022-blake3-aes-128-gcm" {
 		t.Fatalf("method not rendered: %#v", parsed)
+	}
+	if parsed["password"] != password {
+		t.Fatalf("password chain not preserved: %#v", parsed)
 	}
 	if parsed["mode"] != "tcp_and_udp" {
 		t.Fatalf("mode not rendered: %#v", parsed)
