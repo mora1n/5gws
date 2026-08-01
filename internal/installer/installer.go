@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -14,7 +15,7 @@ import (
 )
 
 const (
-	DefaultSmartDNSVersion = "v0.13.0"
+	DefaultSmartDNSVersion = "v0.13.1"
 	DefaultSSRustVersion   = "v1.24.0"
 	installDir             = "/usr/local/bin"
 )
@@ -66,19 +67,36 @@ func ensureSystemPackages(dryRun bool, out io.Writer) error {
 
 func InstallSmartDNS(opts Options, out io.Writer) error {
 	version := versionOr(opts.Version, DefaultSmartDNSVersion)
+	replaceExisting := false
+	destinationDir := installDir
+	if path, err := exec.LookPath("smartdns"); err == nil {
+		installedVersion, err := installedSmartDNSVersion(path)
+		if err != nil {
+			return err
+		}
+		if installedVersion == version {
+			fmt.Fprintf(out, "smartdns-rs: version %s already installed at %s\n", version, path)
+			return nil
+		}
+		fmt.Fprintf(out, "smartdns-rs: replacing %s with %s at %s\n", installedVersion, version, path)
+		replaceExisting = true
+		destinationDir = filepath.Dir(path)
+	}
 	asset, err := smartDNSAsset(version)
 	if err != nil {
 		return err
 	}
 	spec := installSpec{
-		Name:      "smartdns-rs",
-		Binary:    "smartdns",
-		Repo:      "mokeyish/smartdns-rs",
-		Version:   version,
-		Asset:     asset,
-		Checksum:  asset + "-sha256sum.txt",
-		TarArgs:   []string{"-xzf"},
-		Installed: []string{"smartdns"},
+		Name:            "smartdns-rs",
+		Binary:          "smartdns",
+		Repo:            "mokeyish/smartdns-rs",
+		Version:         version,
+		Asset:           asset,
+		Checksum:        asset + "-sha256sum.txt",
+		TarArgs:         []string{"-xzf"},
+		Installed:       []string{"smartdns"},
+		ReplaceExisting: replaceExisting,
+		DestinationDir:  destinationDir,
 	}
 	return installArchive(spec, opts, out)
 }
@@ -103,14 +121,16 @@ func InstallSSRust(opts Options, out io.Writer) error {
 }
 
 type installSpec struct {
-	Name      string
-	Binary    string
-	Repo      string
-	Version   string
-	Asset     string
-	Checksum  string
-	TarArgs   []string
-	Installed []string
+	Name            string
+	Binary          string
+	Repo            string
+	Version         string
+	Asset           string
+	Checksum        string
+	TarArgs         []string
+	Installed       []string
+	ReplaceExisting bool
+	DestinationDir  string
 }
 
 func ensureSmartDNS(cfg config.Config, dryRun bool, out io.Writer) error {
@@ -141,7 +161,7 @@ func hasSSRustExit(cfg config.Config) bool {
 }
 
 func installArchive(spec installSpec, opts Options, out io.Writer) error {
-	if path, err := exec.LookPath(spec.Binary); err == nil {
+	if path, err := exec.LookPath(spec.Binary); err == nil && !spec.ReplaceExisting {
 		fmt.Fprintf(out, "%s: already installed at %s\n", spec.Name, path)
 		return nil
 	}
@@ -150,10 +170,14 @@ func installArchive(spec installSpec, opts Options, out io.Writer) error {
 	}
 	assetURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", spec.Repo, spec.Version, spec.Asset)
 	checksumURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", spec.Repo, spec.Version, spec.Checksum)
+	destinationDir := spec.DestinationDir
+	if destinationDir == "" {
+		destinationDir = installDir
+	}
 	if opts.DryRun {
 		fmt.Fprintf(out, "dry-run: would download %s\n", assetURL)
 		fmt.Fprintf(out, "dry-run: would verify %s\n", checksumURL)
-		fmt.Fprintf(out, "dry-run: would install %s to %s\n", strings.Join(spec.Installed, ", "), installDir)
+		fmt.Fprintf(out, "dry-run: would install %s to %s\n", strings.Join(spec.Installed, ", "), destinationDir)
 		return nil
 	}
 	if os.Geteuid() != 0 {
@@ -185,9 +209,56 @@ func installArchive(spec installSpec, opts Options, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if err := run(out, tmp, "install", "-m", "755", src, filepath.Join(installDir, name)); err != nil {
+		if err := installFileAtomic(src, filepath.Join(destinationDir, name)); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+var smartDNSVersionPattern = regexp.MustCompile(`\bv?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b`)
+
+func installedSmartDNSVersion(path string) (string, error) {
+	data, err := exec.Command(path, "--version").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("inspect installed smartdns-rs version: %w: %s", err, strings.TrimSpace(string(data)))
+	}
+	match := smartDNSVersionPattern.FindStringSubmatch(string(data))
+	if len(match) != 2 {
+		return "", fmt.Errorf("inspect installed smartdns-rs version: unexpected output %q", strings.TrimSpace(string(data)))
+	}
+	return "v" + match[1], nil
+}
+
+func installFileAtomic(src, destination string) error {
+	source, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open install source %s: %w", src, err)
+	}
+	defer source.Close()
+	temporary, err := os.CreateTemp(filepath.Dir(destination), "."+filepath.Base(destination)+"-5gws-*")
+	if err != nil {
+		return fmt.Errorf("create temporary install file for %s: %w", destination, err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o755); err != nil {
+		temporary.Close()
+		return fmt.Errorf("set mode on temporary install file: %w", err)
+	}
+	if _, err := io.Copy(temporary, source); err != nil {
+		temporary.Close()
+		return fmt.Errorf("copy %s to temporary install file: %w", src, err)
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return fmt.Errorf("sync temporary install file: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary install file: %w", err)
+	}
+	if err := os.Rename(temporaryPath, destination); err != nil {
+		return fmt.Errorf("replace %s atomically: %w", destination, err)
 	}
 	return nil
 }

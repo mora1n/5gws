@@ -127,25 +127,21 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	if cfg.IOS.BaseURL != "https://dot.example.com" {
 		t.Fatalf("ios.base_url = %q", cfg.IOS.BaseURL)
 	}
+	if cfg.DNS.CacheSize != 8192 {
+		t.Fatalf("cache_size = %d, want 8192", cfg.DNS.CacheSize)
+	}
 	assertEqualStrings(t, cfg.DNS.UpstreamsCN, []string{
-		"180.76.76.76", "101.226.4.6", "218.30.118.6",
-		"114.114.114.114", "114.114.115.115", "117.50.10.10", "52.80.66.66",
-		"223.5.5.5", "223.6.6.6", "https://dns.alidns.com/dns-query", "tls://dns.alidns.com",
-		"119.29.29.29", "https://doh.pub/dns-query", "tls://1.12.12.12",
-		"180.184.1.1", "180.184.2.2", "https://doh.360.cn/dns-query", "tls://dot.360.cn",
-		"https://doh-pure.onedns.net/dns-query", "tls://dot-pure.onedns.net", "1.2.4.8", "210.2.4.8",
+		"223.5.5.5", "223.6.6.6", "119.29.29.29", "180.76.76.76",
+		"https://dns.alidns.com/dns-query", "tls://dns.alidns.com",
 	})
 	assertEqualStrings(t, cfg.DNS.UpstreamsOverseasPrivate, []string{"22.22.22.22"})
 	assertEqualStrings(t, cfg.DNS.UpstreamsOverseasPublic, []string{
-		"https://cloudflare-dns.com/dns-query",
-		"https://dns.google/dns-query",
-		"https://dns.quad9.net/dns-query",
-		"1.1.1.1",
-		"1.0.0.1",
-		"8.8.8.8",
-		"8.8.4.4",
-		"9.9.9.9",
 		"22.22.22.22",
+		"1.1.1.1",
+		"8.8.8.8",
+		"9.9.9.9",
+		"https://cloudflare-dns.com/dns-query",
+		"https://dns.quad9.net/dns-query",
 	})
 	assertEqualStrings(t, cfg.DNS.BackendResolvers, []string{
 		"1.1.1.1:53",
@@ -158,6 +154,7 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	if len(cfg.DNS.CustomPools) != 2 || cfg.DNS.CustomPools[0].Name != "cn_netease" || cfg.DNS.CustomPools[1].Name != "cn_unicom" {
 		t.Fatalf("custom pools = %#v, want default Netease and Unicom pools", cfg.DNS.CustomPools)
 	}
+	assertEqualStrings(t, cfg.DNS.CustomPools[0].Upstreams, []string{"117.50.10.10", "52.80.66.66", "210.2.4.8"})
 	if cfg.Routing.FallbackExit != "direct" {
 		t.Fatalf("fallback_exit = %q, want direct", cfg.Routing.FallbackExit)
 	}
@@ -274,9 +271,9 @@ func TestApplyDefaultsMigratesOnlyLegacyCNUpstreams(t *testing.T) {
 		cfg := validConfig()
 		cfg.DNS.UpstreamsCN = append([]string(nil), legacy...)
 		cfg.ApplyDefaults()
-		assertEqualStrings(t, cfg.DNS.UpstreamsCN, appendMissing(legacy, defaultCNUpstreams()))
+		assertEqualStrings(t, cfg.DNS.UpstreamsCN, appendMissing(legacy, legacyExpandedCNUpstreams()))
 		cfg.ApplyDefaults()
-		assertEqualStrings(t, cfg.DNS.UpstreamsCN, appendMissing(legacy, defaultCNUpstreams()))
+		assertEqualStrings(t, cfg.DNS.UpstreamsCN, appendMissing(legacy, legacyExpandedCNUpstreams()))
 	}
 
 	cfg := validConfig()
@@ -284,6 +281,19 @@ func TestApplyDefaultsMigratesOnlyLegacyCNUpstreams(t *testing.T) {
 	cfg.DNS.UpstreamsCN = append([]string(nil), custom...)
 	cfg.ApplyDefaults()
 	assertEqualStrings(t, cfg.DNS.UpstreamsCN, custom)
+}
+
+func TestApplyDefaultsPreservesExistingDNSSettings(t *testing.T) {
+	cfg := validConfig()
+	cfg.DNS.CacheSize = 32768
+	cfg.DNS.UpstreamsOverseasPublic = []string{"192.0.2.53", "https://resolver.example/dns-query"}
+	cfg.DNS.CustomPools = []DNSPoolConfig{{Name: "custom", ProbeDomain: "example.com", Upstreams: []string{"198.51.100.53"}}}
+	cfg.ApplyDefaults()
+	if cfg.DNS.CacheSize != 32768 {
+		t.Fatalf("cache_size changed to %d", cfg.DNS.CacheSize)
+	}
+	assertEqualStrings(t, cfg.DNS.UpstreamsOverseasPublic, []string{"192.0.2.53", "https://resolver.example/dns-query"})
+	assertEqualStrings(t, cfg.DNS.CustomPools[0].Upstreams, []string{"198.51.100.53"})
 }
 
 func TestApplyDefaultsMigratesInvalidDOTPubUpstream(t *testing.T) {

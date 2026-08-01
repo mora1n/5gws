@@ -57,8 +57,8 @@ async function mockAPI(page: Page, applyHandler?: (route: Route) => Promise<unkn
     if (path === '/api/v1/me') return json({ username: 'admin' })
     if (path === '/api/v1/dashboard') return json({ version: '0.2.0', active_revision: 7, rules: 10023, processes: [{ name: 'smartdns', pid: 101 }, { name: 'haproxy', pid: 102 }, { name: 'sslocal', pid: 103 }, { name: 'gateway', pid: 100 }] })
     if (path === '/api/v1/metrics') return json({ metrics: [
-      { timestamp: 1720699200, process_count: 4, rss_bytes: 52428800, tcp_connections: 31, rx_bytes: 1000000, tx_bytes: 2000000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 3.2 },
-      { timestamp: 1720699210, process_count: 4, rss_bytes: 53428800, tcp_connections: 35, rx_bytes: 1100000, tx_bytes: 2200000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 4.1 },
+      { timestamp: 1720699200, process_count: 4, rss_bytes: 52428800, swap_bytes: 1048576, tcp_connections: 31, rx_bytes: 1000000, tx_bytes: 2000000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 3.2 },
+      { timestamp: 1720699210, process_count: 4, rss_bytes: 53428800, swap_bytes: 2097152, tcp_connections: 35, rx_bytes: 1100000, tx_bytes: 2200000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 4.1 },
     ] })
     if (path === '/api/v1/diagnostics/run') return json({ checked_at: '2026-07-12T12:00:00Z', dns: [
       { pool: 'cn', upstream: '223.5.5.5', protocol: 'udp', status: 'ok', latency_ms: 12.5, answers: ['1.2.3.4'] },
@@ -107,6 +107,9 @@ test('DNS upstream editor preserves Enter and submits normalized lines', async (
 	await page.getByRole('button', { name: 'DNS 与网络', exact: true }).filter({ visible: true }).click()
 
 	const editor = page.getByLabel('国内上游')
+	const cacheSize = page.getByLabel('DNS 缓存条目上限')
+	await expect(cacheSize).toHaveValue('32768')
+	await cacheSize.fill('8192')
 	await editor.focus()
 	await editor.press('Control+End')
 	await editor.press('Enter')
@@ -120,6 +123,7 @@ test('DNS upstream editor preserves Enter and submits normalized lines', async (
 		'119.29.29.29',
 		'tls://dns.alidns.com',
 	])
+	expect(submitted?.config.dns.cache_size).toBe(8192)
 })
 
 test('SS exit name supports sequential editing while local SOCKS stays internal', async ({ page }) => {
@@ -197,6 +201,8 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
     await mockAPI(page)
     await page.goto('/')
     await expect(page.getByRole('heading', { name: '运行概览' })).toBeVisible()
+		await expect(page.getByText('DNS 服务延迟', { exact: true })).toBeVisible()
+		await expect(page.getByText('托管 Swap', { exact: true })).toBeVisible()
 		await expect(page.getByRole('heading', { name: '运行健康' })).toBeVisible()
 		await expect(page.getByRole('button', { name: '保存' })).toBeHidden()
 		await page.screenshot({ path: `/tmp/5gws-panel-${viewport.name}-overview.png`, fullPage: true })
@@ -216,7 +222,7 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
 				await expect(page.getByRole('button', { name: '保存' })).toBeHidden()
 				await expect(page.getByRole('button', { name: '预检' })).toBeVisible()
 				await expect(page.getByLabel('HAProxy 最大连接数')).toBeHidden()
-				await expect(page.getByLabel('缓存条目')).toBeHidden()
+				await expect(page.getByLabel('DNS 缓存条目上限')).toBeVisible()
 				await expect(page.getByLabel('后端解析器')).toBeHidden()
 				await expect(page.getByLabel('公网 DoT 监听')).toBeHidden()
 				await expect(page.getByLabel('公网海外上游')).toBeVisible()

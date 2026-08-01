@@ -19,7 +19,7 @@ export interface Bundle {
 }
 export interface Dashboard { version: string; active_revision: number; rules: number; processes: { name: string; pid: number }[] }
 export interface ApplyOperation { id: string; status: 'queued' | 'running' | 'succeeded' | 'failed'; changed: boolean; revision_id: number; rule_count: number; warnings: unknown[] | null; error?: string; queued_at: string; started_at?: string; finished_at?: string }
-export interface Metric { timestamp: number; process_count: number; rss_bytes: number; tcp_connections: number; rx_bytes: number; tx_bytes: number; interface: string; dns_ok: boolean; dns_latency_ms: number }
+export interface Metric { timestamp: number; process_count: number; rss_bytes: number; swap_bytes: number; tcp_connections: number; rx_bytes: number; tx_bytes: number; interface: string; dns_ok: boolean; dns_latency_ms: number }
 export interface DNSDiagnostic { pool: string; upstream: string; protocol: string; status: string; latency_ms: number; answers?: string[]; error?: string }
 export interface ExitDiagnostic { name: string; type: string; status: string; upstream?: string; upstream_status?: string; upstream_latency_ms?: number; egress_status: string; egress_ip?: string; egress_latency_ms?: number; error?: string }
 export interface DOTDiagnostic { domain: string; listen: string; status: string; latency_ms?: number; certificate_status: string; expires_at?: string; days_remaining?: number; domain_match: boolean; error?: string }

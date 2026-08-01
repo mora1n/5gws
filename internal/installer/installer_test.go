@@ -1,10 +1,81 @@
 package installer
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestInstallSmartDNSSkipsCurrentVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeExecutable(t, filepath.Join(dir, "smartdns"), "#!/bin/sh\necho 'smartdns 0.13.1'\n")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var out bytes.Buffer
+	if err := InstallSmartDNS(Options{}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "version v0.13.1 already installed") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestInstallSmartDNSDryRunReplacesDifferentVersion(t *testing.T) {
+	dir := t.TempDir()
+	writeExecutable(t, filepath.Join(dir, "smartdns"), "#!/bin/sh\necho 'smartdns 0.13.0'\n")
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var out bytes.Buffer
+	if err := InstallSmartDNS(Options{DryRun: true}, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"replacing v0.13.0 with v0.13.1", "smartdns-rs/releases/download/v0.13.1/"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output %q does not contain %q", out.String(), want)
+		}
+	}
+}
+
+func TestInstalledSmartDNSVersionRejectsUnexpectedOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "smartdns")
+	writeExecutable(t, path, "#!/bin/sh\necho unknown\n")
+	if _, err := installedSmartDNSVersion(path); err == nil {
+		t.Fatal("expected unexpected version output to fail")
+	}
+}
+
+func TestInstallFileAtomicReplacesDestination(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "source")
+	destination := filepath.Join(dir, "smartdns")
+	writeTestFile(t, dir, "source", "new-binary")
+	writeTestFile(t, dir, "smartdns", "old-binary")
+	if err := installFileAtomic(source, destination); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestFile(t, dir, "smartdns"); got != "new-binary" {
+		t.Fatalf("destination = %q", got)
+	}
+	info, err := os.Stat(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 {
+		t.Fatalf("destination mode = %o, want 755", info.Mode().Perm())
+	}
+}
+
+func TestInstallFileAtomicPreservesDestinationOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "smartdns")
+	writeTestFile(t, dir, "smartdns", "old-binary")
+	if err := installFileAtomic(filepath.Join(dir, "missing"), destination); err == nil {
+		t.Fatal("expected missing source to fail")
+	}
+	if got := readTestFile(t, dir, "smartdns"); got != "old-binary" {
+		t.Fatalf("destination changed to %q", got)
+	}
+}
 
 func TestPrepareChecksumFileNormalizesBareSHA256(t *testing.T) {
 	dir := t.TempDir()
@@ -62,4 +133,11 @@ func readTestFile(t *testing.T, dir, name string) string {
 		t.Fatal(err)
 	}
 	return string(data)
+}
+
+func writeExecutable(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
 }

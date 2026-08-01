@@ -10,6 +10,7 @@
   </div></section>
   <section class="panel-section"><h3 class="mb-4 font-semibold">DNS</h3><div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
     <label><span class="field-label">DoT 域名</span><input v-model.trim="bundle.config.dns.dot_domain" class="input w-full" /></label>
+    <label><span class="field-label">DNS 缓存条目上限</span><input v-model.number="bundle.config.dns.cache_size" class="input w-full" type="number" min="1" step="1" /></label>
     <ListField v-model="bundle.config.dns.upstreams_cn" label="国内上游" />
     <ListField v-model="bundle.config.dns.upstreams_overseas_private" label="内网海外上游" />
     <ListField v-model="bundle.config.dns.upstreams_overseas_public" label="公网海外上游" />

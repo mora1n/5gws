@@ -16,6 +16,7 @@ type Metrics struct {
 	Timestamp      int64   `json:"timestamp"`
 	ProcessCount   int     `json:"process_count"`
 	RSSBytes       uint64  `json:"rss_bytes"`
+	SwapBytes      uint64  `json:"swap_bytes"`
 	TCPConnections int     `json:"tcp_connections"`
 	RXBytes        uint64  `json:"rx_bytes"`
 	TXBytes        uint64  `json:"tx_bytes"`
@@ -29,13 +30,20 @@ func CollectMetrics(processes []ProcessStatus, dnsAddress, interfaceName string)
 	pageSize := uint64(os.Getpagesize())
 	for _, process := range processes {
 		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/statm", process.PID))
-		if err != nil {
-			continue
+		if err == nil {
+			fields := strings.Fields(string(data))
+			if len(fields) > 1 {
+				pages, _ := strconv.ParseUint(fields[1], 10, 64)
+				metric.RSSBytes += pages * pageSize
+			}
 		}
-		fields := strings.Fields(string(data))
-		if len(fields) > 1 {
-			pages, _ := strconv.ParseUint(fields[1], 10, 64)
-			metric.RSSBytes += pages * pageSize
+		status, err := os.Open(fmt.Sprintf("/proc/%d/status", process.PID))
+		if err == nil {
+			swapBytes, parseErr := swapBytesFrom(status)
+			status.Close()
+			if parseErr == nil {
+				metric.SwapBytes += swapBytes
+			}
 		}
 	}
 	metric.TCPConnections = countProcLines("/proc/net/tcp") + countProcLines("/proc/net/tcp6")
@@ -46,6 +54,31 @@ func CollectMetrics(processes []ProcessStatus, dnsAddress, interfaceName string)
 		metric.DNSLatencyMS = float64(time.Since(started).Microseconds()) / 1000
 	}
 	return metric
+}
+
+func swapBytesFrom(reader io.Reader) (uint64, error) {
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) == 0 || fields[0] != "VmSwap:" {
+			continue
+		}
+		if len(fields) != 3 || fields[2] != "kB" {
+			return 0, fmt.Errorf("invalid VmSwap line %q", scanner.Text())
+		}
+		kilobytes, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("parse VmSwap value %q: %w", fields[1], err)
+		}
+		if kilobytes > ^uint64(0)/1024 {
+			return 0, fmt.Errorf("VmSwap value %d kB overflows bytes", kilobytes)
+		}
+		return kilobytes * 1024, nil
+	}
+	if err := scanner.Err(); err != nil {
+		return 0, fmt.Errorf("scan process status: %w", err)
+	}
+	return 0, fmt.Errorf("process status does not contain VmSwap")
 }
 
 func countProcLines(path string) int {

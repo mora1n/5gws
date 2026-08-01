@@ -427,7 +427,7 @@ func TestMetricsAreChronologicalAndExposeDNSStatus(t *testing.T) {
 	now := time.Now().Unix()
 	for _, metric := range []engine.Metrics{
 		{Timestamp: now, Interface: "eth0", DNSOK: false},
-		{Timestamp: now + 1, Interface: "eth0", DNSOK: true, DNSLatencyMS: 4.2},
+		{Timestamp: now + 1, Interface: "eth0", SwapBytes: 4096, DNSOK: true, DNSLatencyMS: 4.2},
 	} {
 		if err := server.Service.Store().PutMetric(context.Background(), metric.Timestamp, metric); err != nil {
 			t.Fatal(err)
@@ -445,6 +445,9 @@ func TestMetricsAreChronologicalAndExposeDNSStatus(t *testing.T) {
 	}
 	if len(body.Metrics) != 2 || body.Metrics[0].Timestamp != now || body.Metrics[1].Timestamp != now+1 || body.Metrics[0].DNSOK || !body.Metrics[1].DNSOK {
 		t.Fatalf("metrics = %+v", body.Metrics)
+	}
+	if body.Metrics[1].SwapBytes != 4096 {
+		t.Fatalf("swap_bytes = %d, want 4096", body.Metrics[1].SwapBytes)
 	}
 }
 

@@ -24,3 +24,22 @@ func TestCollectMetricsMarksDNSFailure(t *testing.T) {
 		t.Fatalf("DNS result = ok:%v latency:%v", metric.DNSOK, metric.DNSLatencyMS)
 	}
 }
+
+func TestSwapBytesFromProcStatus(t *testing.T) {
+	input := "Name:\tsmartdns\nVmRSS:\t2048 kB\nVmSwap:\t1536 kB\n"
+	got, err := swapBytesFrom(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1536*1024 {
+		t.Fatalf("swap bytes = %d, want %d", got, 1536*1024)
+	}
+}
+
+func TestSwapBytesFromProcStatusRejectsMalformedValue(t *testing.T) {
+	for _, input := range []string{"Name:\tsmartdns\n", "VmSwap:\tinvalid kB\n", "VmSwap:\t10 MB\n"} {
+		if _, err := swapBytesFrom(strings.NewReader(input)); err == nil {
+			t.Fatalf("expected %q to fail", input)
+		}
+	}
+}

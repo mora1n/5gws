@@ -226,12 +226,12 @@ func (c *Config) ApplyDefaults() {
 		c.IOS.ProfileIdentifier = "dev.5gws.dot"
 	}
 	if c.DNS.CacheSize == 0 {
-		c.DNS.CacheSize = 32768
+		c.DNS.CacheSize = 8192
 	}
 	if len(c.DNS.UpstreamsCN) == 0 {
 		c.DNS.UpstreamsCN = defaultCNUpstreams()
 	} else if usesLegacyCNUpstreams(c.DNS.UpstreamsCN) {
-		c.DNS.UpstreamsCN = appendMissing(c.DNS.UpstreamsCN, defaultCNUpstreams())
+		c.DNS.UpstreamsCN = appendMissing(c.DNS.UpstreamsCN, legacyExpandedCNUpstreams())
 	}
 	c.DNS.UpstreamsCN = migrateDOTPubUpstream(c.DNS.UpstreamsCN)
 	if len(c.DNS.UpstreamsOverseasPrivate) == 0 {
@@ -241,15 +241,12 @@ func (c *Config) ApplyDefaults() {
 	}
 	if len(c.DNS.UpstreamsOverseasPublic) == 0 {
 		c.DNS.UpstreamsOverseasPublic = []string{
-			"https://cloudflare-dns.com/dns-query",
-			"https://dns.google/dns-query",
-			"https://dns.quad9.net/dns-query",
-			"1.1.1.1",
-			"1.0.0.1",
-			"8.8.8.8",
-			"8.8.4.4",
-			"9.9.9.9",
 			"22.22.22.22",
+			"1.1.1.1",
+			"8.8.8.8",
+			"9.9.9.9",
+			"https://cloudflare-dns.com/dns-query",
+			"https://dns.quad9.net/dns-query",
 		}
 	}
 	if c.DNS.CustomPools == nil {
@@ -276,8 +273,6 @@ func DefaultNeteaseDNSPool() DNSPoolConfig {
 		Upstreams: []string{
 			"117.50.10.10",
 			"52.80.66.66",
-			"https://doh-pure.onedns.net/dns-query",
-			"tls://dot-pure.onedns.net",
 			"210.2.4.8",
 		},
 	}
@@ -310,6 +305,17 @@ func (d DNSConfig) PoolNames() []string {
 }
 
 func defaultCNUpstreams() []string {
+	return []string{
+		"223.5.5.5",
+		"223.6.6.6",
+		"119.29.29.29",
+		"180.76.76.76",
+		"https://dns.alidns.com/dns-query",
+		"tls://dns.alidns.com",
+	}
+}
+
+func legacyExpandedCNUpstreams() []string {
 	return []string{
 		"180.76.76.76",
 		"101.226.4.6",
