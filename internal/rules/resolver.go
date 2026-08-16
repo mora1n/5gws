@@ -39,12 +39,14 @@ type importResult struct {
 }
 
 func (r Resolver) Normalize(ctx context.Context, file File) (Normalized, error) {
-	out := make([]Rule, 0, len(file.Rules))
+	sources := make([]normalizedSource, 0, len(file.Rules)+len(file.Imports))
 	for _, rule := range file.Rules {
 		if err := validateRule(rule); err != nil {
 			return Normalized{}, err
 		}
-		out = append(out, rule)
+		sources = append(sources, normalizedSource{
+			priority: rule.Priority, defaulted: isDefaultName(rule.Name), index: len(sources), rules: []Rule{rule},
+		})
 	}
 	results := make(chan importResult, len(file.Imports))
 	for i, item := range file.Imports {
@@ -63,8 +65,16 @@ func (r Resolver) Normalize(ctx context.Context, file File) (Normalized, error) 
 		if result.err != nil {
 			return Normalized{}, fmt.Errorf("import %q: %w", file.Imports[i].Name, result.err)
 		}
-		out = append(out, result.rules...)
-		warnings = append(warnings, result.warnings...)
+		sources = append(sources, normalizedSource{
+			priority: file.Imports[i].Priority, defaulted: isDefaultName(file.Imports[i].Name),
+			index: len(sources), rules: result.rules, warnings: result.warnings,
+		})
+	}
+	sortNormalizedSources(sources)
+	var out []Rule
+	for _, source := range sources {
+		out = append(out, source.rules...)
+		warnings = append(warnings, source.warnings...)
 	}
 	return Normalized{Rules: out, Warnings: warnings}, nil
 }
@@ -72,6 +82,9 @@ func (r Resolver) Normalize(ctx context.Context, file File) (Normalized, error) 
 func (r Resolver) resolveImport(ctx context.Context, imp Import) ([]Rule, []Warning, error) {
 	if strings.TrimSpace(imp.Name) == "" || imp.Type == "" {
 		return nil, nil, errors.New("import name and type are required")
+	}
+	if imp.Priority < 0 {
+		return nil, nil, fmt.Errorf("import %q: priority must be >= 0", imp.Name)
 	}
 	if (imp.Exit == "") == (imp.DNSPool == "") {
 		return nil, nil, errors.New("exactly one of exit or dns_pool is required")

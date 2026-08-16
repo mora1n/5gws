@@ -78,3 +78,37 @@ func TestResolverFetchesImportsConcurrentlyInDeclaredOrder(t *testing.T) {
 		t.Fatalf("import order changed: %q, %q", norm.Rules[0].Name, norm.Rules[1].Name)
 	}
 }
+
+func TestResolverPlacesCustomImportsBeforeManagedRules(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"version":3,"rules":[{"domain_suffix":["example.com"]}]}`))
+	}))
+	defer server.Close()
+
+	norm, err := (Resolver{Client: server.Client()}).Normalize(context.Background(), File{
+		Rules: []Rule{
+			{Name: "ip-check", Exit: "direct", DomainSuffix: []string{"icanhazip.com"}},
+			{Name: "custom-local", Priority: 2, Exit: "direct", DomainSuffix: []string{"local.example"}},
+		},
+		Imports: []Import{
+			{Name: "speedtest", Type: "sing-box", URL: server.URL, Exit: "direct"},
+			{Name: "custom-import", Priority: 1, Type: "sing-box", URL: server.URL, Exit: "direct"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"custom-import", "custom-local", "ip-check", "speedtest"}
+	if len(norm.Rules) != len(want) {
+		t.Fatalf("normalized rules = %#v, want names %#v", norm.Rules, want)
+	}
+	for index, name := range want {
+		if norm.Rules[index].Name != name {
+			t.Fatalf("normalized rule %d = %q, want %q; all=%#v", index, norm.Rules[index].Name, name, norm.Rules)
+		}
+	}
+	matched, ok := norm.MatchGatewayDomain("example.com")
+	if !ok || matched.Name != "custom-import" {
+		t.Fatalf("matched rule = %#v, %t; want custom-import to win", matched, ok)
+	}
+}

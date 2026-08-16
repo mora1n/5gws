@@ -268,6 +268,14 @@ type Warning struct {
 	Detail  string
 }
 
+type normalizedSource struct {
+	priority  int
+	defaulted bool
+	index     int
+	rules     []Rule
+	warnings  []Warning
+}
+
 func (w Warning) String() string {
 	parts := []string{"skipped import", w.Import}
 	if w.Rule != "" {
@@ -295,20 +303,13 @@ func Load(path string) (File, error) {
 }
 
 func Normalize(file File) (Normalized, error) {
-	type source struct {
-		priority  int
-		defaulted bool
-		index     int
-		rules     []Rule
-		warnings  []Warning
-	}
-	sources := make([]source, 0, len(file.Rules)+len(file.Imports))
+	sources := make([]normalizedSource, 0, len(file.Rules)+len(file.Imports))
 	index := 0
 	for _, rule := range file.Rules {
 		if err := validateRule(rule); err != nil {
 			return Normalized{}, err
 		}
-		sources = append(sources, source{priority: rule.Priority, defaulted: isDefaultName(rule.Name), index: index, rules: []Rule{rule}})
+		sources = append(sources, normalizedSource{priority: rule.Priority, defaulted: isDefaultName(rule.Name), index: index, rules: []Rule{rule}})
 		index++
 	}
 	for _, imp := range file.Imports {
@@ -316,9 +317,20 @@ func Normalize(file File) (Normalized, error) {
 		if err != nil {
 			return Normalized{}, err
 		}
-		sources = append(sources, source{priority: imp.Priority, defaulted: isDefaultName(imp.Name), index: index, rules: imported, warnings: skipped})
+		sources = append(sources, normalizedSource{priority: imp.Priority, defaulted: isDefaultName(imp.Name), index: index, rules: imported, warnings: skipped})
 		index++
 	}
+	sortNormalizedSources(sources)
+	var out []Rule
+	var warnings []Warning
+	for _, item := range sources {
+		out = append(out, item.rules...)
+		warnings = append(warnings, item.warnings...)
+	}
+	return Normalized{Rules: out, Warnings: warnings}, nil
+}
+
+func sortNormalizedSources(sources []normalizedSource) {
 	sort.SliceStable(sources, func(i, j int) bool {
 		left, right := sources[i], sources[j]
 		if left.defaulted != right.defaulted {
@@ -338,13 +350,6 @@ func Normalize(file File) (Normalized, error) {
 		}
 		return left.index < right.index
 	})
-	var out []Rule
-	var warnings []Warning
-	for _, item := range sources {
-		out = append(out, item.rules...)
-		warnings = append(warnings, item.warnings...)
-	}
-	return Normalized{Rules: out, Warnings: warnings}, nil
 }
 
 func validateRule(rule Rule) error {
