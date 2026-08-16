@@ -54,13 +54,13 @@
     <div class="mb-3 flex items-center justify-between"><h3 class="font-semibold">自定义本地规则</h3><span class="badge badge-ghost">{{ customLocalRules.length }}</span></div>
     <div class="space-y-3">
       <div v-for="(rule, index) in customLocalRules" :key="index" class="grid gap-3 border border-base-300 bg-base-100 p-3 md:grid-cols-[1fr_10rem_1fr_auto]">
-        <input v-model.trim="rule.name" class="input input-sm w-full" placeholder="名称" />
+        <input v-model="rule.name" class="input input-sm w-full" placeholder="名称" />
         <select class="select select-sm w-full" :value="target(rule)" @change="targetChange(rule, $event)"><option v-for="value in targets" :key="value" :value="value">{{ value }}</option></select>
         <input :value="(rule.domain_suffix || []).join(', ')" class="input input-sm w-full mono" placeholder="example.com, example.net" @input="domainChange(rule, $event)" />
         <button class="btn btn-ghost btn-square btn-sm text-error" title="删除" @click="removeRule(rule)"><Trash2 class="size-4" /></button>
       </div>
       <form v-if="pendingRule" ref="ruleDraftForm" class="grid gap-3 border border-primary/50 bg-primary/5 p-3 md:grid-cols-[1fr_10rem_1fr_auto]" @submit.prevent="confirmRuleDraft">
-        <input ref="ruleDraftName" v-model.trim="pendingRule.name" class="input input-sm w-full" placeholder="名称" aria-label="新规则名称" pattern="[A-Za-z0-9_.-]+" required />
+        <input ref="ruleDraftName" v-model="pendingRule.name" class="input input-sm w-full" placeholder="名称" aria-label="新规则名称" required />
         <select class="select select-sm w-full" :value="pendingRuleTarget" aria-label="新规则目标" required @change="draftRuleTargetChange"><option v-for="value in targets" :key="value" :value="value">{{ value }}</option></select>
         <input :value="(pendingRule.domain_suffix || []).join(', ')" class="input input-sm w-full mono" placeholder="example.com, example.net" aria-label="新规则域名" required @input="draftRuleDomainChange" />
         <div class="flex gap-2 md:justify-end"><button type="submit" class="btn btn-primary btn-sm">确认添加</button><button type="button" class="btn btn-ghost btn-sm" @click="cancelRuleDraft">取消</button></div>
@@ -73,12 +73,12 @@
     <div class="mb-3 flex items-center justify-between"><h3 class="font-semibold">自定义远程导入</h3><button class="btn btn-ghost btn-sm" @click="addImport"><Plus class="size-4" />导入</button></div>
     <div class="space-y-3">
       <div v-for="(item, index) in customImports" :key="index" class="grid gap-3 border border-base-300 bg-base-100 p-3 lg:grid-cols-[10rem_8rem_1fr_10rem_auto]">
-        <input v-model.trim="item.name" class="input input-sm w-full" placeholder="名称" /><select v-model="item.type" class="select select-sm w-full"><option value="sing-box">sing-box</option><option value="mihomo">Mihomo</option></select>
+        <input v-model="item.name" class="input input-sm w-full" placeholder="名称" /><select v-model="item.type" class="select select-sm w-full"><option value="sing-box">sing-box</option><option value="mihomo">Mihomo</option></select>
         <input v-model.trim="item.url" class="input input-sm w-full mono" placeholder="https://" /><select class="select select-sm w-full" :value="target(item)" @change="targetChange(item, $event)"><option v-for="value in targets" :key="value" :value="value">{{ value }}</option></select>
         <button class="btn btn-ghost btn-square btn-sm text-error" title="删除" @click="removeImport(item)"><Trash2 class="size-4" /></button>
       </div>
       <form v-if="pendingImport" ref="importDraftForm" class="grid gap-3 border border-primary/50 bg-primary/5 p-3 lg:grid-cols-[10rem_8rem_1fr_10rem_auto]" @submit.prevent="confirmImportDraft">
-        <input ref="importDraftName" v-model.trim="pendingImport.name" class="input input-sm w-full" placeholder="名称" aria-label="新导入名称" pattern="[A-Za-z0-9_.-]+" required /><select v-model="pendingImport.type" class="select select-sm w-full" aria-label="新导入类型" required><option value="sing-box">sing-box</option><option value="mihomo">Mihomo</option></select>
+        <input ref="importDraftName" v-model="pendingImport.name" class="input input-sm w-full" placeholder="名称" aria-label="新导入名称" required /><select v-model="pendingImport.type" class="select select-sm w-full" aria-label="新导入类型" required><option value="sing-box">sing-box</option><option value="mihomo">Mihomo</option></select>
         <input v-model.trim="pendingImport.url" type="url" class="input input-sm w-full mono" placeholder="https://" aria-label="新导入地址" required /><select class="select select-sm w-full" :value="pendingImportTarget" aria-label="新导入目标" required @change="draftImportTargetChange"><option v-for="value in targets" :key="value" :value="value">{{ value }}</option></select>
         <div class="flex gap-2 lg:justify-end"><button type="submit" class="btn btn-primary btn-sm">确认添加</button><button type="button" class="btn btn-ghost btn-sm" @click="cancelImportDraft">取消</button></div>
       </form>

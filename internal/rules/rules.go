@@ -305,7 +305,7 @@ func Normalize(file File) (Normalized, error) {
 }
 
 func validateRule(rule Rule) error {
-	if rule.Name == "" {
+	if strings.TrimSpace(rule.Name) == "" {
 		return errors.New("rule name is required")
 	}
 	if (rule.Exit == "") == (rule.DNSPool == "") {
@@ -362,7 +362,7 @@ func (r Rule) Empty() bool {
 }
 
 func loadImport(imp Import) ([]Rule, []Warning, error) {
-	if imp.Name == "" || imp.Type == "" {
+	if strings.TrimSpace(imp.Name) == "" || imp.Type == "" {
 		return nil, nil, errors.New("import name and type are required")
 	}
 	if (imp.Exit == "") == (imp.DNSPool == "") {

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"regexp"
 
 	"github.com/morain/5gws/internal/config"
 )
@@ -50,9 +49,9 @@ func LocalAddr(exit config.ExitConfig) string {
 }
 
 func ServiceName(exit config.ExitConfig) string {
-	return "5gws-ssrust-" + exit.Name + ".service"
+	return "5gws-ssrust-" + config.ExitID(exit.Name) + ".service"
 }
 
 func ConfigFileName(exit config.ExitConfig) string {
-	return regexp.MustCompile(`[^A-Za-z0-9_]+`).ReplaceAllString(exit.Name, "_") + ".json"
+	return config.ExitID(exit.Name) + ".json"
 }

@@ -2,7 +2,9 @@ package config
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -54,6 +56,32 @@ type NetworkConfig struct {
 }
 
 const DefaultHAProxyMaxConnections = 16384
+
+var (
+	exitIDSafePattern   = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+	exitIDLegacyPattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+	exitIDUnsafePattern = regexp.MustCompile(`[^A-Za-z0-9_]+`)
+)
+
+// ExitID returns the stable ASCII identifier used by generated runtime files and proxies.
+// The user-facing exit name remains unchanged in the persisted configuration.
+func ExitID(name string) string {
+	if exitIDSafePattern.MatchString(name) {
+		return name
+	}
+	slug := strings.Trim(exitIDUnsafePattern.ReplaceAllString(name, "_"), "_")
+	if slug == "" {
+		slug = "exit"
+	}
+	if exitIDLegacyPattern.MatchString(name) {
+		return slug
+	}
+	if len(slug) > 48 {
+		slug = slug[:48]
+	}
+	digest := sha256.Sum256([]byte(name))
+	return slug + "_" + hex.EncodeToString(digest[:8])
+}
 
 type RoutingConfig struct {
 	FallbackExit string `toml:"fallback_exit" json:"fallback_exit"`
@@ -626,11 +654,8 @@ func validateRouting(r RoutingConfig, exits []ExitConfig) error {
 }
 
 func validateExit(exit ExitConfig) error {
-	if exit.Name == "" || exit.Type == "" {
+	if strings.TrimSpace(exit.Name) == "" || exit.Type == "" {
 		return errors.New("exit name and type are required")
-	}
-	if !regexp.MustCompile(`^[A-Za-z0-9_.-]+$`).MatchString(exit.Name) {
-		return fmt.Errorf("exit %q: name may only contain letters, digits, dot, underscore, and dash", exit.Name)
 	}
 	switch exit.Type {
 	case "direct":

@@ -159,6 +159,33 @@ func TestHAProxyUsesFallbackForUnknownHostOrSNI(t *testing.T) {
 	}
 }
 
+func TestGenerateUsesSafeRuntimeIDsForComplexExitName(t *testing.T) {
+	cfg := testConfig()
+	complexName := "🇯🇵 Tokyo SS"
+	cfg.Exits[1].Name = complexName
+	norm := rules.Normalized{Rules: []rules.Rule{
+		{Name: "复杂规则 🚀", Exit: complexName, DomainSuffix: []string{"example.com"}},
+	}}
+	files, err := Generate(cfg, norm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := config.ExitID(complexName)
+	got := map[string]string{}
+	for _, file := range files {
+		got[file.Path] = file.Content
+	}
+	haproxy := got["haproxy/haproxy.cfg"]
+	for _, want := range []string{"use_backend http_" + id, "use_backend tls_" + id, "backend http_" + id, "backend tls_" + id} {
+		if !strings.Contains(haproxy, want) {
+			t.Fatalf("HAProxy missing safe runtime ID %q:\n%s", want, haproxy)
+		}
+	}
+	if _, ok := got["ssrust/"+id+".json"]; !ok {
+		t.Fatalf("missing SS config for safe runtime ID %q; got %#v", id, got)
+	}
+}
+
 func TestHAProxyCanUseAutomaticMaxConnections(t *testing.T) {
 	cfg := testConfig()
 	automatic := 0

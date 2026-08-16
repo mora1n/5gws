@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -69,7 +70,7 @@ func (r Resolver) Normalize(ctx context.Context, file File) (Normalized, error) 
 }
 
 func (r Resolver) resolveImport(ctx context.Context, imp Import) ([]Rule, []Warning, error) {
-	if imp.Name == "" || imp.Type == "" {
+	if strings.TrimSpace(imp.Name) == "" || imp.Type == "" {
 		return nil, nil, errors.New("import name and type are required")
 	}
 	if (imp.Exit == "") == (imp.DNSPool == "") {

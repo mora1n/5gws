@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -296,9 +295,7 @@ func joinInts(values []int) string {
 }
 
 func sanitize(value string) string {
-	re := regexp.MustCompile(`[^A-Za-z0-9_]+`)
-	out := re.ReplaceAllString(value, "_")
-	return strings.Trim(out, "_")
+	return config.ExitID(value)
 }
 
 func mustExecute(tmpl string, data any) string {

@@ -92,6 +92,23 @@ func TestNormalizeRejectsAmbiguousRuleAction(t *testing.T) {
 	}
 }
 
+func TestNormalizeAcceptsComplexRuleAndImportNames(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rules.json")
+	mustWrite(t, path, `{"version":3,"rules":[{"domain_suffix":["example.com"]}]}`)
+
+	norm, err := Normalize(File{
+		Imports: []Import{{Name: "远程规则 🚀", Type: "sing-box", Path: path, Exit: "direct"}},
+		Rules:   []Rule{{Name: "🇯🇵 Tokyo Rule", Exit: "direct", DomainSuffix: []string{"tokyo.example"}}},
+	})
+	if err != nil {
+		t.Fatalf("complex rule/import names rejected: %v", err)
+	}
+	if norm.Rules[0].Name != "🇯🇵 Tokyo Rule" || norm.Rules[1].Name != "远程规则 🚀" {
+		t.Fatalf("normalized names = %#v", norm.Rules)
+	}
+}
+
 func TestValidateDNSPoolReferencesAcceptsCustomPool(t *testing.T) {
 	file := File{Rules: []Rule{{Name: "music", DNSPool: "music_pool", DomainSuffix: []string{"music.163.com"}}}}
 	if err := ValidateDNSPoolReferences(file, []string{"cn", "music_pool"}); err != nil {

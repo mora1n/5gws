@@ -17,7 +17,7 @@
     </div>
   </section>
   <section class="panel-section"><div class="overflow-x-auto border border-base-300"><table class="table"><thead><tr><th>名称</th><th>类型</th><th>服务器</th><th></th></tr></thead><tbody>
-    <tr v-for="(exit, index) in bundle.config.exits" :key="index"><td><input v-model.trim="exit.name" class="input input-sm w-36" :disabled="exit.type === 'direct'" /></td><td><span class="badge badge-ghost">{{ exit.type }}</span></td><td><span v-if="exit.type === 'direct'">-</span><div v-else class="flex gap-2"><input v-model.trim="exit.server" class="input input-sm w-40" /><input v-model.number="exit.server_port" type="number" class="input input-sm w-24" /></div></td><td><button v-if="exit.type !== 'direct'" class="btn btn-ghost btn-square btn-sm text-error" title="删除" @click="bundle.config.exits.splice(index, 1)"><Trash2 class="size-4" /></button></td></tr>
+    <tr v-for="(exit, index) in bundle.config.exits" :key="index"><td><input v-model="exit.name" class="input input-sm w-36" :disabled="exit.type === 'direct'" /></td><td><span class="badge badge-ghost">{{ exit.type }}</span></td><td><span v-if="exit.type === 'direct'">-</span><div v-else class="flex gap-2"><input v-model.trim="exit.server" class="input input-sm w-40" /><input v-model.number="exit.server_port" type="number" class="input input-sm w-24" /></div></td><td><button v-if="exit.type !== 'direct'" class="btn btn-ghost btn-square btn-sm text-error" title="删除" @click="bundle.config.exits.splice(index, 1)"><Trash2 class="size-4" /></button></td></tr>
   </tbody></table></div></section>
   <section v-for="(exit, index) in ssExits" :key="index" class="panel-section"><h3 class="mb-4 font-semibold">{{ exit.name }}</h3><div class="grid gap-4 md:grid-cols-2">
     <label><span class="field-label">加密方法</span><select v-model="exit.method" class="select w-full"><optgroup v-for="group in cipherGroups" :key="group.label" :label="group.label"><option v-for="method in group.methods" :key="method" :value="method">{{ method }}</option></optgroup></select></label>
@@ -26,7 +26,7 @@
   <form v-if="pendingExit" ref="exitDraftForm" class="panel-section border border-primary/50 bg-primary/5" @submit.prevent="confirmExitDraft">
     <h3 class="mb-4 font-semibold">新建 SS 出口</h3>
     <div class="grid gap-4 md:grid-cols-2">
-      <label><span class="field-label">名称</span><input ref="exitDraftName" v-model.trim="pendingExit.name" class="input w-full" aria-label="新 SS 出口名称" pattern="[A-Za-z0-9_.-]+" required /></label>
+      <label><span class="field-label">名称</span><input ref="exitDraftName" v-model="pendingExit.name" class="input w-full" aria-label="新 SS 出口名称" required /></label>
       <label><span class="field-label">服务器</span><input v-model.trim="pendingExit.server" class="input w-full" aria-label="新 SS 出口服务器" required /></label>
       <label><span class="field-label">服务器端口</span><input v-model.number="pendingExit.server_port" type="number" min="1" max="65535" class="input w-full" aria-label="新 SS 出口服务器端口" required /></label>
       <label><span class="field-label">加密方法</span><select v-model="pendingExit.method" class="select w-full" aria-label="新 SS 出口加密方法" required><optgroup v-for="group in cipherGroups" :key="group.label" :label="group.label"><option v-for="method in group.methods" :key="method" :value="method">{{ method }}</option></optgroup></select></label>

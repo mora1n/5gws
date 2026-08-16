@@ -49,6 +49,50 @@ func TestValidateRequiresShadowsocksFields(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsComplexExitName(t *testing.T) {
+	cfg := validConfig()
+	exit := validSSExit()
+	exit.Name = "🇯🇵 Tokyo SS"
+	cfg.Exits = append(cfg.Exits, exit)
+	cfg.Routing.FallbackExit = exit.Name
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("complex exit name rejected: %v", err)
+	}
+}
+
+func TestValidateRejectsWhitespaceOnlyExitName(t *testing.T) {
+	cfg := validConfig()
+	exit := validSSExit()
+	exit.Name = " \t"
+	cfg.Exits = append(cfg.Exits, exit)
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected whitespace-only exit name to be rejected")
+	}
+}
+
+func TestExitIDKeepsSafeNamesAndSeparatesComplexNames(t *testing.T) {
+	if got := ExitID("ss1"); got != "ss1" {
+		t.Fatalf("safe exit ID = %q, want ss1", got)
+	}
+	if got := ExitID("tokyo-ss"); got != "tokyo_ss" {
+		t.Fatalf("legacy exit ID = %q, want tokyo_ss", got)
+	}
+	if got := ExitID("A B"); got == ExitID("A_B") {
+		t.Fatalf("complex exit ID collides with safe name: %q", got)
+	}
+	for _, name := range []string{"🇯🇵 Tokyo SS", "🚀"} {
+		id := ExitID(name)
+		if id == "" {
+			t.Fatalf("exit ID for %q is empty", name)
+		}
+		for _, r := range id {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_') {
+				t.Fatalf("exit ID for %q contains unsafe rune %q: %q", name, r, id)
+			}
+		}
+	}
+}
+
 func TestValidateAccepts2022KeysAndIdentityChains(t *testing.T) {
 	tests := []struct {
 		name, method string

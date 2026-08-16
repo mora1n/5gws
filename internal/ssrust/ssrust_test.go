@@ -47,3 +47,14 @@ func TestConfigRendersSupportedFieldsOnly(t *testing.T) {
 		t.Fatalf("timeout not rendered in seconds: %#v", parsed)
 	}
 }
+
+func TestRuntimeNamesUseSafeIDsForComplexExitNames(t *testing.T) {
+	exit := config.ExitConfig{Name: "🇯🇵 Tokyo SS"}
+	want := config.ExitID(exit.Name)
+	if got := ConfigFileName(exit); got != want+".json" {
+		t.Fatalf("config file name = %q, want %q", got, want+".json")
+	}
+	if got := ServiceName(exit); got != "5gws-ssrust-"+want+".service" {
+		t.Fatalf("service name = %q, want safe ID %q", got, want)
+	}
+}
