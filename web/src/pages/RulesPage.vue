@@ -51,6 +51,19 @@
   </section>
 
   <section class="panel-section">
+    <div class="mb-3 flex items-center justify-between"><h3 class="font-semibold">自定义规则优先级</h3><span class="text-sm text-base-content/60">越靠前优先级越高</span></div>
+    <div v-if="customEntries.length" class="space-y-2">
+      <div v-for="(entry, index) in customEntries" :key="`${entry.kind}-${entry.index}`" class="flex items-center gap-2 border border-base-300 bg-base-100 p-2">
+        <span class="badge badge-outline w-8 shrink-0">{{ index + 1 }}</span>
+        <div class="min-w-0 flex-1"><span class="block truncate font-medium">{{ entry.item.name }}</span><span class="text-xs text-base-content/55">{{ entry.kind === 'rule' ? '本地规则' : '远程导入' }}</span></div>
+        <button class="btn btn-ghost btn-square btn-sm" :aria-label="`上移规则 ${entry.item.name}`" :disabled="index === 0" title="上移" @click="moveEntry(index, -1)"><ArrowUp class="size-4" /></button>
+        <button class="btn btn-ghost btn-square btn-sm" :aria-label="`下移规则 ${entry.item.name}`" :disabled="index === customEntries.length - 1" title="下移" @click="moveEntry(index, 1)"><ArrowDown class="size-4" /></button>
+      </div>
+    </div>
+    <div v-else class="border border-dashed border-base-300 py-6 text-center text-sm text-base-content/50">暂无自定义规则</div>
+  </section>
+
+  <section class="panel-section">
     <div class="mb-3 flex items-center justify-between"><h3 class="font-semibold">自定义本地规则</h3><span class="badge badge-ghost">{{ customLocalRules.length }}</span></div>
     <div class="space-y-3">
       <div v-for="(rule, index) in customLocalRules" :key="index" class="grid gap-3 border border-base-300 bg-base-100 p-3 md:grid-cols-[1fr_10rem_1fr_auto]">
@@ -89,7 +102,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Plus, RefreshCw, Trash2 } from '@lucide/vue'
+import { ArrowDown, ArrowUp, Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import { api } from '@/api'
 import type { ActiveRules, Bundle, ImportRule, Rule, RuleFile } from '@/types'
 
@@ -102,8 +115,22 @@ if (!bundle.value.rules.imports) bundle.value.rules.imports = []
 const managedLocalRules = computed(() => props.managed.rules || [])
 const managedImports = computed(() => props.managed.imports || [])
 const managedNames = computed(() => new Set([...managedLocalRules.value, ...managedImports.value].map(item => item.name)))
+const defaultNames = computed(() => new Set([...managedNames.value, 'netease-music', 'china-unicom-app']))
 const customLocalRules = computed(() => bundle.value.rules.rules!.filter(item => !managedNames.value.has(item.name)))
 const customImports = computed(() => bundle.value.rules.imports!.filter(item => !managedNames.value.has(item.name)))
+const customEntries = computed(() => [
+  ...customLocalRules.value.filter(item => !defaultNames.value.has(item.name)).map((item, index) => ({ kind: 'rule' as const, item, index })),
+  ...customImports.value.filter(item => !defaultNames.value.has(item.name)).map((item, index) => ({ kind: 'import' as const, item, index })),
+].sort((left, right) => {
+  const leftPriority = left.item.priority || 0
+  const rightPriority = right.item.priority || 0
+  if (leftPriority !== rightPriority) {
+    if (leftPriority === 0) return 1
+    if (rightPriority === 0) return -1
+    return leftPriority - rightPriority
+  }
+  return left.kind === right.kind ? left.index - right.index : left.kind === 'rule' ? -1 : 1
+}))
 const summary = ref<ActiveRules | null>(null)
 const loading = ref(false)
 const pendingRule = ref<Rule | null>(null)
@@ -148,12 +175,22 @@ function addImport() {
 function draftRuleTargetChange(event: Event) { if (pendingRule.value) setTarget(pendingRule.value, (event.target as HTMLSelectElement).value) }
 function draftImportTargetChange(event: Event) { if (pendingImport.value) setTarget(pendingImport.value, (event.target as HTMLSelectElement).value) }
 function draftRuleDomainChange(event: Event) { if (pendingRule.value) domainChange(pendingRule.value, event) }
-function confirmRuleDraft() { if (!pendingRule.value) return; bundle.value.rules.rules!.push(pendingRule.value); pendingRule.value = null }
+function reindexEntries(entries = customEntries.value) { entries.forEach((entry, index) => { entry.item.priority = index + 1 }) }
+function moveEntry(index: number, offset: -1 | 1) {
+  const entries = customEntries.value.slice()
+  const targetIndex = index + offset
+  if (targetIndex < 0 || targetIndex >= entries.length) return
+  const current = entries[index]
+  entries[index] = entries[targetIndex]
+  entries[targetIndex] = current
+  reindexEntries(entries)
+}
+function confirmRuleDraft() { if (!pendingRule.value) return; bundle.value.rules.rules!.push(pendingRule.value); pendingRule.value = null; reindexEntries() }
 function cancelRuleDraft() { pendingRule.value = null }
-function confirmImportDraft() { if (!pendingImport.value) return; bundle.value.rules.imports!.push(pendingImport.value); pendingImport.value = null }
+function confirmImportDraft() { if (!pendingImport.value) return; bundle.value.rules.imports!.push(pendingImport.value); pendingImport.value = null; reindexEntries() }
 function cancelImportDraft() { pendingImport.value = null }
-function removeRule(rule: Rule) { const index = bundle.value.rules.rules!.indexOf(rule); if (index >= 0) bundle.value.rules.rules!.splice(index, 1) }
-function removeImport(item: ImportRule) { const index = bundle.value.rules.imports!.indexOf(item); if (index >= 0) bundle.value.rules.imports!.splice(index, 1) }
+function removeRule(rule: Rule) { const index = bundle.value.rules.rules!.indexOf(rule); if (index >= 0) bundle.value.rules.rules!.splice(index, 1); reindexEntries() }
+function removeImport(item: ImportRule) { const index = bundle.value.rules.imports!.indexOf(item); if (index >= 0) bundle.value.rules.imports!.splice(index, 1); reindexEntries() }
 
 onMounted(loadActiveRules)
 watch(() => props.activeRevision, (next, previous) => { if (next && next !== previous) loadActiveRules() })

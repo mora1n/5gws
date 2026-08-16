@@ -1,10 +1,13 @@
 package rules
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 func TestNormalizeImportsSingBoxAndMihomo(t *testing.T) {
@@ -27,17 +30,17 @@ func TestNormalizeImportsSingBoxAndMihomo(t *testing.T) {
 	if got := len(norm.Rules); got != 3 {
 		t.Fatalf("rules count = %d, want 3", got)
 	}
-	if norm.Rules[1].DomainSuffix[0] != "example.cn" {
-		t.Fatalf("sing-box suffix not imported: %#v", norm.Rules[1])
+	if norm.Rules[2].DomainSuffix[0] != "example.cn" {
+		t.Fatalf("sing-box suffix not imported: %#v", norm.Rules[2])
 	}
-	if norm.Rules[1].DNSPool != "cn" || norm.Rules[1].Exit != "" {
-		t.Fatalf("sing-box DNS pool import has wrong action: %#v", norm.Rules[1])
+	if norm.Rules[2].DNSPool != "cn" || norm.Rules[2].Exit != "" {
+		t.Fatalf("sing-box DNS pool import has wrong action: %#v", norm.Rules[2])
 	}
-	if norm.Rules[1].Name != "cn" {
-		t.Fatalf("single sing-box rule name = %q, want cn", norm.Rules[1].Name)
+	if norm.Rules[2].Name != "cn" {
+		t.Fatalf("single sing-box rule name = %q, want cn", norm.Rules[2].Name)
 	}
-	if norm.Rules[2].Domain[0] != "example.com" {
-		t.Fatalf("mihomo domain not imported: %#v", norm.Rules[2])
+	if norm.Rules[1].Domain[0] != "example.com" {
+		t.Fatalf("mihomo domain not imported: %#v", norm.Rules[1])
 	}
 	if got := len(norm.GatewayRules()); got != 2 {
 		t.Fatalf("gateway rules count = %d, want 2", got)
@@ -106,6 +109,75 @@ func TestNormalizeAcceptsComplexRuleAndImportNames(t *testing.T) {
 	}
 	if norm.Rules[0].Name != "🇯🇵 Tokyo Rule" || norm.Rules[1].Name != "远程规则 🚀" {
 		t.Fatalf("normalized names = %#v", norm.Rules)
+	}
+}
+
+func TestNormalizePlacesCustomRulesBeforeManagedRules(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rules.json")
+	mustWrite(t, path, `{"version":3,"rules":[{"domain_suffix":["example.com"]}]}`)
+
+	norm, err := Normalize(File{
+		Rules: []Rule{
+			{Name: "ip-check", Exit: "direct", DomainSuffix: []string{"icanhazip.com"}},
+			{Name: "custom-local", Priority: 2, Exit: "direct", DomainSuffix: []string{"local.example"}},
+			DefaultNeteaseRule(),
+		},
+		Imports: []Import{
+			{Name: "speedtest", Type: "sing-box", Path: path, Exit: "direct"},
+			{Name: "custom-import", Priority: 1, Type: "sing-box", Path: path, Exit: "direct"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"custom-import", "custom-local", "ip-check", "netease-music", "speedtest"}
+	if len(norm.Rules) != len(want) {
+		t.Fatalf("normalized rules = %#v, want names %#v", norm.Rules, want)
+	}
+	for index, name := range want {
+		if norm.Rules[index].Name != name {
+			t.Fatalf("normalized rule %d = %q, want %q; all=%#v", index, norm.Rules[index].Name, name, norm.Rules)
+		}
+	}
+	matched, ok := norm.MatchGatewayDomain("example.com")
+	if !ok || matched.Name != "custom-import" {
+		t.Fatalf("matched rule = %#v, %t; want custom-import to win", matched, ok)
+	}
+}
+
+func TestRulePriorityRoundTripsThroughJSONAndTOML(t *testing.T) {
+	original := File{
+		Rules:   []Rule{{Name: "local", Priority: 3, Exit: "direct", DomainSuffix: []string{"local.example"}}},
+		Imports: []Import{{Name: "remote", Priority: 1, Type: "sing-box", URL: "https://example.com/rules.json", Exit: "direct"}},
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fromJSON File
+	if err := json.Unmarshal(data, &fromJSON); err != nil {
+		t.Fatal(err)
+	}
+	if fromJSON.Rules[0].Priority != 3 || fromJSON.Imports[0].Priority != 1 {
+		t.Fatalf("JSON priorities = %#v", fromJSON)
+	}
+	tomlData, err := toml.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fromTOML File
+	if err := toml.Unmarshal(tomlData, &fromTOML); err != nil {
+		t.Fatal(err)
+	}
+	if fromTOML.Rules[0].Priority != 3 || fromTOML.Imports[0].Priority != 1 {
+		t.Fatalf("TOML priorities = %#v", fromTOML)
+	}
+}
+
+func TestNormalizeRejectsNegativePriority(t *testing.T) {
+	if _, err := Normalize(File{Rules: []Rule{{Name: "bad", Priority: -1, Exit: "direct", DomainSuffix: []string{"example.com"}}}}); err == nil {
+		t.Fatal("expected negative rule priority to be rejected")
 	}
 }
 

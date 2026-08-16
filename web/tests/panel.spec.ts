@@ -236,10 +236,13 @@ test('new rule and remote import require confirmation before applying', async ({
 	await page.getByLabel('新导入名称').fill(complexImportName)
 	await page.getByLabel('新导入地址').fill('https://rules.example.test/remote.json')
 	await page.getByRole('button', { name: '确认添加', exact: true }).last().click()
+	const priority = page.locator('section').filter({ has: page.getByRole('heading', { name: '自定义规则优先级', exact: true }) })
+	await priority.getByRole('button', { name: `上移规则 ${complexRuleName}`, exact: true }).click()
 	await page.getByRole('button', { name: '应用', exact: true }).click()
 	await expect(page.getByText('配置已应用，共 10023 条规则')).toBeVisible()
 	await expect.poll(() => submitted?.rules.rules).toContainEqual(expect.objectContaining({ name: complexRuleName, domain_suffix: ['manual-confirmed.invalid'] }))
 	await expect.poll(() => submitted?.rules.imports).toContainEqual(expect.objectContaining({ name: complexImportName, url: 'https://rules.example.test/remote.json' }))
+	expect(submitted?.rules.rules.find(rule => rule.name === complexRuleName)?.priority).toBe(1)
 })
 
 for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: 'mobile', width: 390, height: 844 }]) {

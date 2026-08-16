@@ -12,6 +12,15 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
+func TestResolvedLocalRulesCurrentIgnoresNormalizedOrder(t *testing.T) {
+	local := rules.Rule{Name: "local", Priority: 1, Exit: "direct", DomainSuffix: []string{"local.example"}}
+	imported := rules.Rule{Name: "remote", Priority: 2, Exit: "direct", DomainSuffix: []string{"remote.example"}}
+	bundle := Bundle{Rules: rules.File{Rules: []rules.Rule{local}}, ResolvedRules: []rules.Rule{imported, local}}
+	if !bundle.ResolvedLocalRulesCurrent() {
+		t.Fatalf("local rule should be recognized in normalized order: %#v", bundle.ResolvedRules)
+	}
+}
+
 func TestRevisionLifecycle(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "5gws.db"))
 	if err != nil {

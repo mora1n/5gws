@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -132,13 +133,14 @@ func matchRuleDomain(rule Rule, host string) bool {
 }
 
 type Import struct {
-	Name    string `toml:"name" json:"name"`
-	Type    string `toml:"type" json:"type"`
-	Path    string `toml:"path" json:"path"`
-	URL     string `toml:"url" json:"url"`
-	Format  string `toml:"format" json:"format"`
-	Exit    string `toml:"exit" json:"exit"`
-	DNSPool string `toml:"dns_pool" json:"dns_pool"`
+	Name     string `toml:"name" json:"name"`
+	Priority int    `toml:"priority,omitempty" json:"priority,omitempty"`
+	Type     string `toml:"type" json:"type"`
+	Path     string `toml:"path" json:"path"`
+	URL      string `toml:"url" json:"url"`
+	Format   string `toml:"format" json:"format"`
+	Exit     string `toml:"exit" json:"exit"`
+	DNSPool  string `toml:"dns_pool" json:"dns_pool"`
 }
 
 func (i *Import) UnmarshalJSON(data []byte) error {
@@ -147,7 +149,7 @@ func (i *Import) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	accepted := map[string]string{
-		"name": "Name", "type": "Type", "path": "Path", "url": "URL",
+		"name": "Name", "priority": "Priority", "type": "Type", "path": "Path", "url": "URL",
 		"format": "Format", "exit": "Exit", "dns_pool": "DNSPool",
 	}
 	for lower, legacy := range accepted {
@@ -170,6 +172,11 @@ func (i *Import) UnmarshalJSON(data []byte) error {
 		}
 	}
 	var decoded Import
+	if raw, ok := firstJSONField(fields, "priority", accepted["priority"]); ok {
+		if err := json.Unmarshal(raw, &decoded.Priority); err != nil {
+			return fmt.Errorf("decode import priority: %w", err)
+		}
+	}
 	targets := map[string]*string{
 		"name": &decoded.Name, "type": &decoded.Type, "path": &decoded.Path,
 		"url": &decoded.URL, "format": &decoded.Format, "exit": &decoded.Exit,
@@ -188,6 +195,7 @@ func (i *Import) UnmarshalJSON(data []byte) error {
 
 type Rule struct {
 	Name          string   `toml:"name" json:"name" yaml:"name"`
+	Priority      int      `toml:"priority,omitempty" json:"priority,omitempty" yaml:"priority,omitempty"`
 	Exit          string   `toml:"exit" json:"exit" yaml:"exit"`
 	DNSPool       string   `toml:"dns_pool" json:"dns_pool" yaml:"dns_pool"`
 	Domain        []string `toml:"domain" json:"domain" yaml:"domain"`
@@ -201,6 +209,7 @@ type Rule struct {
 func (r *Rule) UnmarshalJSON(data []byte) error {
 	var raw struct {
 		Name          string         `json:"name"`
+		Priority      int            `json:"priority"`
 		Exit          string         `json:"exit"`
 		DNSPool       string         `json:"dns_pool"`
 		Domain        jsonStringList `json:"domain"`
@@ -215,6 +224,7 @@ func (r *Rule) UnmarshalJSON(data []byte) error {
 	}
 	*r = Rule{
 		Name:          raw.Name,
+		Priority:      raw.Priority,
 		Exit:          raw.Exit,
 		DNSPool:       raw.DNSPool,
 		Domain:        []string(raw.Domain),
@@ -285,21 +295,54 @@ func Load(path string) (File, error) {
 }
 
 func Normalize(file File) (Normalized, error) {
-	var out []Rule
-	var warnings []Warning
+	type source struct {
+		priority  int
+		defaulted bool
+		index     int
+		rules     []Rule
+		warnings  []Warning
+	}
+	sources := make([]source, 0, len(file.Rules)+len(file.Imports))
+	index := 0
 	for _, rule := range file.Rules {
 		if err := validateRule(rule); err != nil {
 			return Normalized{}, err
 		}
-		out = append(out, rule)
+		sources = append(sources, source{priority: rule.Priority, defaulted: isDefaultName(rule.Name), index: index, rules: []Rule{rule}})
+		index++
 	}
 	for _, imp := range file.Imports {
 		imported, skipped, err := loadImport(imp)
 		if err != nil {
 			return Normalized{}, err
 		}
-		out = append(out, imported...)
-		warnings = append(warnings, skipped...)
+		sources = append(sources, source{priority: imp.Priority, defaulted: isDefaultName(imp.Name), index: index, rules: imported, warnings: skipped})
+		index++
+	}
+	sort.SliceStable(sources, func(i, j int) bool {
+		left, right := sources[i], sources[j]
+		if left.defaulted != right.defaulted {
+			return !left.defaulted
+		}
+		if left.defaulted {
+			return left.index < right.index
+		}
+		if left.priority != right.priority {
+			if left.priority == 0 {
+				return false
+			}
+			if right.priority == 0 {
+				return true
+			}
+			return left.priority < right.priority
+		}
+		return left.index < right.index
+	})
+	var out []Rule
+	var warnings []Warning
+	for _, item := range sources {
+		out = append(out, item.rules...)
+		warnings = append(warnings, item.warnings...)
 	}
 	return Normalized{Rules: out, Warnings: warnings}, nil
 }
@@ -307,6 +350,9 @@ func Normalize(file File) (Normalized, error) {
 func validateRule(rule Rule) error {
 	if strings.TrimSpace(rule.Name) == "" {
 		return errors.New("rule name is required")
+	}
+	if rule.Priority < 0 {
+		return fmt.Errorf("rule %q: priority must be >= 0", rule.Name)
 	}
 	if (rule.Exit == "") == (rule.DNSPool == "") {
 		return fmt.Errorf("rule %q: exactly one of exit or dns_pool is required", rule.Name)
@@ -365,6 +411,9 @@ func loadImport(imp Import) ([]Rule, []Warning, error) {
 	if strings.TrimSpace(imp.Name) == "" || imp.Type == "" {
 		return nil, nil, errors.New("import name and type are required")
 	}
+	if imp.Priority < 0 {
+		return nil, nil, fmt.Errorf("import %q: priority must be >= 0", imp.Name)
+	}
 	if (imp.Exit == "") == (imp.DNSPool == "") {
 		return nil, nil, fmt.Errorf("import %q: exactly one of exit or dns_pool is required", imp.Name)
 	}
@@ -422,6 +471,7 @@ func parseSingBox(imp Import, data []byte) ([]Rule, []Warning, error) {
 	var warnings []Warning
 	for i, rule := range set.Rules {
 		rule.Name = fmt.Sprintf("%s-%d", imp.Name, i+1)
+		rule.Priority = imp.Priority
 		rule.Exit = imp.Exit
 		rule.DNSPool = imp.DNSPool
 		warnings = append(warnings, stripUnsupportedImportMatchers(imp.Name, &rule)...)
@@ -462,7 +512,7 @@ func parseMihomo(imp Import, data []byte) ([]Rule, []Warning, error) {
 	if len(provider.Payload) == 0 {
 		return nil, nil, fmt.Errorf("import %q: empty payload", imp.Name)
 	}
-	rule := Rule{Name: imp.Name, Exit: imp.Exit, DNSPool: imp.DNSPool}
+	rule := Rule{Name: imp.Name, Priority: imp.Priority, Exit: imp.Exit, DNSPool: imp.DNSPool}
 	var warnings []Warning
 	for _, item := range provider.Payload {
 		warning, err := addMihomoPayload(&rule, item)

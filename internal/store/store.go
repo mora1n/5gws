@@ -36,7 +36,30 @@ func (b *Bundle) ApplyDefaults() {
 }
 
 func (b Bundle) ResolvedLocalRulesCurrent() bool {
-	return len(b.ResolvedRules) >= len(b.Rules.Rules) && reflect.DeepEqual(b.ResolvedRules[:len(b.Rules.Rules)], b.Rules.Rules)
+	if len(b.ResolvedRules) < len(b.Rules.Rules) {
+		return false
+	}
+	counts := make(map[string]int, len(b.ResolvedRules))
+	for _, resolved := range b.ResolvedRules {
+		key, err := ruleKey(resolved)
+		if err != nil {
+			return false
+		}
+		counts[key]++
+	}
+	for _, local := range b.Rules.Rules {
+		key, err := ruleKey(local)
+		if err != nil || counts[key] == 0 {
+			return false
+		}
+		counts[key]--
+	}
+	return true
+}
+
+func ruleKey(rule rules.Rule) (string, error) {
+	data, err := json.Marshal(rule)
+	return string(data), err
 }
 
 func (b Bundle) SameInput(other Bundle) bool {

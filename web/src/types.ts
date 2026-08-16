@@ -1,7 +1,7 @@
 export interface Exit { name: string; type: 'direct' | 'shadowsocks-rust'; fwmark: number; server: string; server_port: number; method: string; password: string; username: string; listen_address: string; listen_port: number; tcp: boolean | null; udp: boolean | null; timeout_seconds: number }
 export interface DNSPool { name: string; probe_domain: string; upstreams: string[] }
-export interface Rule { name: string; exit: string; dns_pool: string; domain?: string[]; domain_suffix?: string[]; domain_keyword?: string[]; domain_regex?: string[]; ip_cidr?: string[]; rule_set?: string[] }
-export interface ImportRule { name: string; type: string; path: string; url: string; format: string; exit: string; dns_pool: string }
+export interface Rule { name: string; priority?: number; exit: string; dns_pool: string; domain?: string[]; domain_suffix?: string[]; domain_keyword?: string[]; domain_regex?: string[]; ip_cidr?: string[]; rule_set?: string[] }
+export interface ImportRule { name: string; priority?: number; type: string; path: string; url: string; format: string; exit: string; dns_pool: string }
 export interface RuleFile { imports: ImportRule[] | null; rules: Rule[] | null }
 export interface Bundle {
   config: {

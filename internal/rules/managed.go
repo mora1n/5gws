@@ -92,7 +92,7 @@ func ValidateManaged(file File) error {
 }
 
 func equalRule(left, right Rule) bool {
-	return left.Name == right.Name && left.Exit == right.Exit && left.DNSPool == right.DNSPool &&
+	return left.Name == right.Name && left.Priority == right.Priority && left.Exit == right.Exit && left.DNSPool == right.DNSPool &&
 		slices.Equal(left.Domain, right.Domain) && slices.Equal(left.DomainSuffix, right.DomainSuffix) &&
 		slices.Equal(left.DomainKeyword, right.DomainKeyword) && slices.Equal(left.DomainRegex, right.DomainRegex) &&
 		slices.Equal(left.IPCIDR, right.IPCIDR) && slices.Equal(left.RuleSet, right.RuleSet)
@@ -124,4 +124,23 @@ func importsNamed(items []Import, name string) []Import {
 		}
 	}
 	return matches
+}
+
+func isManagedName(name string) bool {
+	managed := ManagedFile()
+	for _, rule := range managed.Rules {
+		if rule.Name == name {
+			return true
+		}
+	}
+	for _, imp := range managed.Imports {
+		if imp.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func isDefaultName(name string) bool {
+	return isManagedName(name) || name == DefaultNeteaseRule().Name || name == DefaultUnicomRule().Name
 }
