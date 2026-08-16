@@ -3,7 +3,7 @@
   <main v-else-if="startupError" class="grid min-h-screen place-items-center bg-base-200 p-4"><div class="alert alert-error max-w-xl"><CircleAlert class="size-5 shrink-0" /><span class="break-all">{{ startupError }}</span><button class="btn btn-sm" @click="initialize">重试</button></div></main>
   <AuthView v-else-if="!authenticated" :setup="needsSetup" @done="start" />
   <div v-else class="flex h-screen overflow-hidden bg-base-200">
-    <AppNav :page="page" @select="page = $event" @logout="logout" />
+    <AppNav :page="page" @select="selectPage" @logout="logout" />
     <main class="min-w-0 flex-1 overflow-y-auto pb-16 lg:pb-0">
       <header class="sticky top-0 z-20 flex min-h-16 flex-wrap items-center justify-between gap-2 border-b border-base-300 bg-base-100/95 px-4 py-2 backdrop-blur sm:px-6">
         <div class="min-w-0 truncate font-medium">{{ pageTitle }}</div>
@@ -12,8 +12,8 @@
       <div v-if="message" class="mx-4 mt-4 flex items-center gap-2 border px-3 py-2 text-sm sm:mx-6" :class="error ? 'border-error/40 bg-error/10 text-error' : 'border-success/40 bg-success/10 text-success'"><LoaderCircle v-if="applying" class="size-4 shrink-0 animate-spin" /><CircleAlert v-else-if="error" class="size-4 shrink-0" /><CircleCheck v-else class="size-4 shrink-0" /><span class="break-all">{{ message }}</span><button class="btn btn-ghost btn-square btn-xs ml-auto" title="关闭" @click="message = ''"><X class="size-4" /></button></div>
       <OverviewPage v-if="page === 'overview'" :dashboard="dashboard" :metrics="metrics" :diagnostics="diagnostics" :runtime-busy="runtimeBusy" @refresh="refresh" @refresh-runtime="refreshRuntime" />
       <NetworkPage v-else-if="page === 'network' && bundle" v-model:bundle="bundle" :diagnostics="diagnostics" :diagnostics-busy="diagnosticsBusy" @refresh-diagnostics="runDiagnostics('network')" @error="show($event, true)" />
-      <RulesPage v-else-if="page === 'rules' && bundle && managedRules" v-model:bundle="bundle" :managed="managedRules" :active-revision="dashboard?.active_revision || 0" @error="show($event, true)" />
-      <ExitsPage v-else-if="page === 'exits' && bundle" v-model:bundle="bundle" :diagnostics="diagnostics" :diagnostics-busy="diagnosticsBusy" @refresh-diagnostics="runDiagnostics('exits')" />
+      <RulesPage v-else-if="page === 'rules' && bundle && managedRules" v-model:bundle="bundle" :managed="managedRules" :active-revision="dashboard?.active_revision || 0" @error="show($event, true)" @pending-change="draftPending = $event" />
+      <ExitsPage v-else-if="page === 'exits' && bundle" v-model:bundle="bundle" :diagnostics="diagnostics" :diagnostics-busy="diagnosticsBusy" @refresh-diagnostics="runDiagnostics('exits')" @pending-change="draftPending = $event" />
       <LogsPage v-else-if="page === 'logs'" @error="show($event, true)" />
       <SettingsPage v-else-if="page === 'settings' && bundle" v-model:bundle="bundle" :active-revision="dashboard?.active_revision || 0" @imported="imported" @message="show($event, false)" @error="show($event, true)" @signed-out="authenticated = false" />
     </main>
@@ -27,7 +27,7 @@ import { APIError, api } from '@/api'; import type { ApplyOperation, Bundle, Das
 import AuthView from '@/components/AuthView.vue'; import AppNav from '@/components/AppNav.vue'
 import OverviewPage from '@/pages/OverviewPage.vue'; import NetworkPage from '@/pages/NetworkPage.vue'; import RulesPage from '@/pages/RulesPage.vue'; import ExitsPage from '@/pages/ExitsPage.vue'; import LogsPage from '@/pages/LogsPage.vue'; import SettingsPage from '@/pages/SettingsPage.vue'
 
-const loading=ref(true), authenticated=ref(false), needsSetup=ref(false), busy=ref(false), applying=ref(false), error=ref(false)
+const loading=ref(true), authenticated=ref(false), needsSetup=ref(false), busy=ref(false), applying=ref(false), error=ref(false), draftPending=ref(false)
 const page=ref('overview'), message=ref(''), startupError=ref(''), dashboard=ref<Dashboard|null>(null), bundle=ref<Bundle|null>(null)
 const managedRules=ref<RuleFile|null>(null)
 const metrics=ref<Metric[]>([]), diagnostics=ref<Diagnostics|null>(null), diagnosticsBusy=ref(false), metricsBusy=ref(false)
@@ -42,9 +42,9 @@ const themeTitle=computed(()=>theme.value === 'light-neutral' ? '切换到深色
 async function start(){ authenticated.value=true; await reload(); void refreshRuntime(); startMetricsTimer() }
 async function reload(){ [dashboard.value,bundle.value,managedRules.value]=await Promise.all([api.dashboard(),api.config(),api.defaultRules()]) }
 async function refresh(){ try{ await reload() }catch(cause){ show(cause,true) } }
-async function validate(){ if(!bundle.value)return; await action(async()=>{ const result=await api.validateConfig(bundle.value!); return `预检通过，共 ${result.rule_count} 条规则` }) }
+async function validate(){ if(!bundle.value || !ensureNoPendingDraft())return; await action(async()=>{ const result=await api.validateConfig(bundle.value!); return `预检通过，共 ${result.rule_count} 条规则` }) }
 async function apply(){
-  if(!bundle.value || busy.value)return
+  if(!bundle.value || busy.value || !ensureNoPendingDraft())return
   busy.value=true; applying.value=true
   const operationID=crypto.randomUUID(), submitted={ value:false }
   show('正在提交配置',false)
@@ -81,6 +81,8 @@ async function reloadAfterApply(){
 function retryableApplyError(cause:unknown){ return cause instanceof TypeError || (cause instanceof APIError && (cause.status===404 || cause.status>=500)) }
 function sleep(milliseconds:number){ return new Promise(resolve=>window.setTimeout(resolve,milliseconds)) }
 function imported(value: Bundle){ bundle.value=value; show('配置已导入，请预检后应用',false) }
+function ensureNoPendingDraft(){ if(!draftPending.value)return true; show('请先确认添加或取消正在新建的项目',true); return false }
+function selectPage(next: string){ if(!ensureNoPendingDraft())return; page.value=next }
 async function action(fn:()=>Promise<string>){ busy.value=true; try{ show(await fn(),false) }catch(cause){ show(cause,true) }finally{ busy.value=false } }
 async function loadMetrics(){ if(metricsBusy.value)return; metricsBusy.value=true; try{ metrics.value=(await api.metrics()).metrics }catch(cause){ show(cause,true) }finally{ metricsBusy.value=false } }
 async function runDiagnostics(scope='all'){ if(diagnosticsBusy.value)return; diagnosticsBusy.value=true; try{ if(scope==='network'){ const [dns,dot]=await Promise.all([api.runDiagnostics('dns'),api.runDiagnostics('dot')]); diagnostics.value={...diagnostics.value,...dns,...dot,checked_at:dot.checked_at} }else{ const result=await api.runDiagnostics(scope); diagnostics.value={...diagnostics.value,...result} } }catch(cause){ show(cause,true) }finally{ diagnosticsBusy.value=false } }

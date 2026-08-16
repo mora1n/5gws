@@ -59,7 +59,13 @@
         <input :value="(rule.domain_suffix || []).join(', ')" class="input input-sm w-full mono" placeholder="example.com, example.net" @input="domainChange(rule, $event)" />
         <button class="btn btn-ghost btn-square btn-sm text-error" title="删除" @click="removeRule(rule)"><Trash2 class="size-4" /></button>
       </div>
-      <div v-if="!customLocalRules.length" class="border border-dashed border-base-300 py-10 text-center text-sm text-base-content/50">暂无自定义本地规则</div>
+      <form v-if="pendingRule" ref="ruleDraftForm" class="grid gap-3 border border-primary/50 bg-primary/5 p-3 md:grid-cols-[1fr_10rem_1fr_auto]" @submit.prevent="confirmRuleDraft">
+        <input ref="ruleDraftName" v-model.trim="pendingRule.name" class="input input-sm w-full" placeholder="名称" aria-label="新规则名称" pattern="[A-Za-z0-9_.-]+" required />
+        <select class="select select-sm w-full" :value="pendingRuleTarget" aria-label="新规则目标" required @change="draftRuleTargetChange"><option v-for="value in targets" :key="value" :value="value">{{ value }}</option></select>
+        <input :value="(pendingRule.domain_suffix || []).join(', ')" class="input input-sm w-full mono" placeholder="example.com, example.net" aria-label="新规则域名" required @input="draftRuleDomainChange" />
+        <div class="flex gap-2 md:justify-end"><button type="submit" class="btn btn-primary btn-sm">确认添加</button><button type="button" class="btn btn-ghost btn-sm" @click="cancelRuleDraft">取消</button></div>
+      </form>
+      <div v-if="!customLocalRules.length && !pendingRule" class="border border-dashed border-base-300 py-10 text-center text-sm text-base-content/50">暂无自定义本地规则</div>
     </div>
   </section>
 
@@ -71,20 +77,25 @@
         <input v-model.trim="item.url" class="input input-sm w-full mono" placeholder="https://" /><select class="select select-sm w-full" :value="target(item)" @change="targetChange(item, $event)"><option v-for="value in targets" :key="value" :value="value">{{ value }}</option></select>
         <button class="btn btn-ghost btn-square btn-sm text-error" title="删除" @click="removeImport(item)"><Trash2 class="size-4" /></button>
       </div>
-      <div v-if="!customImports.length" class="border border-dashed border-base-300 py-10 text-center text-sm text-base-content/50">暂无自定义远程导入</div>
+      <form v-if="pendingImport" ref="importDraftForm" class="grid gap-3 border border-primary/50 bg-primary/5 p-3 lg:grid-cols-[10rem_8rem_1fr_10rem_auto]" @submit.prevent="confirmImportDraft">
+        <input ref="importDraftName" v-model.trim="pendingImport.name" class="input input-sm w-full" placeholder="名称" aria-label="新导入名称" pattern="[A-Za-z0-9_.-]+" required /><select v-model="pendingImport.type" class="select select-sm w-full" aria-label="新导入类型" required><option value="sing-box">sing-box</option><option value="mihomo">Mihomo</option></select>
+        <input v-model.trim="pendingImport.url" type="url" class="input input-sm w-full mono" placeholder="https://" aria-label="新导入地址" required /><select class="select select-sm w-full" :value="pendingImportTarget" aria-label="新导入目标" required @change="draftImportTargetChange"><option v-for="value in targets" :key="value" :value="value">{{ value }}</option></select>
+        <div class="flex gap-2 lg:justify-end"><button type="submit" class="btn btn-primary btn-sm">确认添加</button><button type="button" class="btn btn-ghost btn-sm" @click="cancelImportDraft">取消</button></div>
+      </form>
+      <div v-if="!customImports.length && !pendingImport" class="border border-dashed border-base-300 py-10 text-center text-sm text-base-content/50">暂无自定义远程导入</div>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Plus, RefreshCw, Trash2 } from '@lucide/vue'
 import { api } from '@/api'
 import type { ActiveRules, Bundle, ImportRule, Rule, RuleFile } from '@/types'
 
 const bundle = defineModel<Bundle>('bundle', { required: true })
 const props = defineProps<{ activeRevision: number; managed: RuleFile }>()
-const emit = defineEmits<{ error: [value: string] }>()
+const emit = defineEmits<{ error: [value: string]; 'pending-change': [value: boolean] }>()
 if (!bundle.value.rules.rules) bundle.value.rules.rules = []
 if (!bundle.value.rules.imports) bundle.value.rules.imports = []
 
@@ -95,7 +106,16 @@ const customLocalRules = computed(() => bundle.value.rules.rules!.filter(item =>
 const customImports = computed(() => bundle.value.rules.imports!.filter(item => !managedNames.value.has(item.name)))
 const summary = ref<ActiveRules | null>(null)
 const loading = ref(false)
+const pendingRule = ref<Rule | null>(null)
+const pendingImport = ref<ImportRule | null>(null)
+const ruleDraftForm = ref<HTMLFormElement | null>(null)
+const importDraftForm = ref<HTMLFormElement | null>(null)
+const ruleDraftName = ref<HTMLInputElement | null>(null)
+const importDraftName = ref<HTMLInputElement | null>(null)
 const activeTime = computed(() => summary.value?.active_at ? new Date(summary.value.active_at).toLocaleString() : '-')
+const pending = computed(() => pendingRule.value !== null || pendingImport.value !== null)
+const pendingRuleTarget = computed(() => pendingRule.value ? target(pendingRule.value) : '')
+const pendingImportTarget = computed(() => pendingImport.value ? target(pendingImport.value) : '')
 const targets = computed(() => [
   'pool:cn',
   'pool:overseas_private',
@@ -116,11 +136,27 @@ function setTarget(item: Rule | ImportRule, value: string) { const [kind, name] 
 function list(value: string) { return value.split(',').map(item => item.trim()).filter(Boolean) }
 function targetChange(item: Rule | ImportRule, event: Event) { setTarget(item, (event.target as HTMLSelectElement).value) }
 function domainChange(rule: Rule, event: Event) { rule.domain_suffix = list((event.target as HTMLInputElement).value) }
-function addRule() { bundle.value.rules.rules!.push({ name: `rule-${customLocalRules.value.length + 1}`, exit: 'direct', dns_pool: '', domain_suffix: [] }) }
-function addImport() { bundle.value.rules.imports!.push({ name: `import-${customImports.value.length + 1}`, type: 'sing-box', path: '', url: '', format: '', exit: 'direct', dns_pool: '' }) }
+function focusDraft(element: { value: HTMLInputElement | null }, form: { value: HTMLFormElement | null }) { void nextTick(() => { form.value?.scrollIntoView({ behavior: 'smooth', block: 'center' }); element.value?.focus() }) }
+function addRule() {
+  if (!pendingRule.value) pendingRule.value = { name: `rule-${customLocalRules.value.length + 1}`, exit: 'direct', dns_pool: '', domain_suffix: [] }
+  focusDraft(ruleDraftName, ruleDraftForm)
+}
+function addImport() {
+  if (!pendingImport.value) pendingImport.value = { name: `import-${customImports.value.length + 1}`, type: 'sing-box', path: '', url: '', format: '', exit: 'direct', dns_pool: '' }
+  focusDraft(importDraftName, importDraftForm)
+}
+function draftRuleTargetChange(event: Event) { if (pendingRule.value) setTarget(pendingRule.value, (event.target as HTMLSelectElement).value) }
+function draftImportTargetChange(event: Event) { if (pendingImport.value) setTarget(pendingImport.value, (event.target as HTMLSelectElement).value) }
+function draftRuleDomainChange(event: Event) { if (pendingRule.value) domainChange(pendingRule.value, event) }
+function confirmRuleDraft() { if (!pendingRule.value) return; bundle.value.rules.rules!.push(pendingRule.value); pendingRule.value = null }
+function cancelRuleDraft() { pendingRule.value = null }
+function confirmImportDraft() { if (!pendingImport.value) return; bundle.value.rules.imports!.push(pendingImport.value); pendingImport.value = null }
+function cancelImportDraft() { pendingImport.value = null }
 function removeRule(rule: Rule) { const index = bundle.value.rules.rules!.indexOf(rule); if (index >= 0) bundle.value.rules.rules!.splice(index, 1) }
 function removeImport(item: ImportRule) { const index = bundle.value.rules.imports!.indexOf(item); if (index >= 0) bundle.value.rules.imports!.splice(index, 1) }
 
 onMounted(loadActiveRules)
 watch(() => props.activeRevision, (next, previous) => { if (next && next !== previous) loadActiveRules() })
+watch(pending, value => emit('pending-change', value), { immediate: true })
+onBeforeUnmount(() => emit('pending-change', false))
 </script>

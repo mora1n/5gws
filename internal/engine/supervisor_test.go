@@ -3,8 +3,11 @@ package engine
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +39,34 @@ func TestManagedCommandsUseSingleHAProxyProcess(t *testing.T) {
 	if len(commands) != 2 || !reflect.DeepEqual(commands[1], want) {
 		t.Fatalf("managed commands = %#v, want HAProxy command %#v", commands, want)
 	}
+}
+
+func TestRequireRuntimeCommandsForSSExit(t *testing.T) {
+	ssBundle := store.Bundle{Config: config.Config{Exits: []config.ExitConfig{{Type: "shadowsocks-rust"}}}}
+	t.Run("missing", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		err := requireRuntimeCommands(ssBundle)
+		if err == nil || !strings.Contains(err.Error(), "install it with: 5gws install-ssrust --yes") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("available", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "sslocal"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir)
+		if err := requireRuntimeCommands(ssBundle); err != nil {
+			t.Fatalf("requireRuntimeCommands() error = %v", err)
+		}
+	})
+	t.Run("direct-only", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		bundle := store.Bundle{Config: config.Config{Exits: []config.ExitConfig{{Type: "direct"}}}}
+		if err := requireRuntimeCommands(bundle); err != nil {
+			t.Fatalf("direct-only bundle unexpectedly requires sslocal: %v", err)
+		}
+	})
 }
 
 func TestReadinessTimeoutCoversSlowSmartDNSStartup(t *testing.T) {

@@ -23,16 +23,31 @@
     <label><span class="field-label">加密方法</span><select v-model="exit.method" class="select w-full"><optgroup v-for="group in cipherGroups" :key="group.label" :label="group.label"><option v-for="method in group.methods" :key="method" :value="method">{{ method }}</option></optgroup></select></label>
     <div><span class="field-label">密码</span><div class="join flex w-full"><input v-model="exit.password" :type="passwordVisible(exit) ? 'text' : 'password'" aria-label="密码" class="input join-item min-w-0 flex-1" /><button type="button" class="btn btn-square join-item" :title="passwordVisible(exit) ? '隐藏密码' : '显示密码'" @click="togglePassword(exit)"><EyeOff v-if="passwordVisible(exit)" class="size-4" /><Eye v-else class="size-4" /></button></div><div v-if="keyHint(exit.method)" class="mt-1 text-xs text-base-content/55">{{ keyHint(exit.method) }}</div></div>
   </div></section>
+  <form v-if="pendingExit" ref="exitDraftForm" class="panel-section border border-primary/50 bg-primary/5" @submit.prevent="confirmExitDraft">
+    <h3 class="mb-4 font-semibold">新建 SS 出口</h3>
+    <div class="grid gap-4 md:grid-cols-2">
+      <label><span class="field-label">名称</span><input ref="exitDraftName" v-model.trim="pendingExit.name" class="input w-full" aria-label="新 SS 出口名称" pattern="[A-Za-z0-9_.-]+" required /></label>
+      <label><span class="field-label">服务器</span><input v-model.trim="pendingExit.server" class="input w-full" aria-label="新 SS 出口服务器" required /></label>
+      <label><span class="field-label">服务器端口</span><input v-model.number="pendingExit.server_port" type="number" min="1" max="65535" class="input w-full" aria-label="新 SS 出口服务器端口" required /></label>
+      <label><span class="field-label">加密方法</span><select v-model="pendingExit.method" class="select w-full" aria-label="新 SS 出口加密方法" required><optgroup v-for="group in cipherGroups" :key="group.label" :label="group.label"><option v-for="method in group.methods" :key="method" :value="method">{{ method }}</option></optgroup></select></label>
+      <div class="md:col-span-2"><span class="field-label">密码</span><div class="join flex w-full"><input v-model="pendingExit.password" :type="passwordVisible(pendingExit) ? 'text' : 'password'" aria-label="新 SS 出口密码" class="input join-item min-w-0 flex-1" required /><button type="button" class="btn btn-square join-item" :title="passwordVisible(pendingExit) ? '隐藏密码' : '显示密码'" @click="togglePassword(pendingExit)"><EyeOff v-if="passwordVisible(pendingExit)" class="size-4" /><Eye v-else class="size-4" /></button></div><div v-if="keyHint(pendingExit.method)" class="mt-1 text-xs text-base-content/55">{{ keyHint(pendingExit.method) }}</div></div>
+    </div>
+    <div class="mt-4 flex justify-end gap-2"><button type="submit" class="btn btn-primary btn-sm">确认添加</button><button type="button" class="btn btn-ghost btn-sm" @click="cancelExitDraft">取消</button></div>
+  </form>
 </template>
 <script setup lang="ts">
-import { computed, ref } from 'vue'; import { Eye, EyeOff, Plus, RefreshCw, Trash2 } from '@lucide/vue'; import type { Bundle, Diagnostics, Exit } from '@/types'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'; import { Eye, EyeOff, Plus, RefreshCw, Trash2 } from '@lucide/vue'; import type { Bundle, Diagnostics, Exit } from '@/types'
 const cipherGroups = [
   { label: 'AEAD 2022', methods: ['2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305'] },
   { label: 'AEAD', methods: ['aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305'] },
 ] as const
-const bundle = defineModel<Bundle>('bundle', { required: true }); const props = defineProps<{ diagnostics: Diagnostics | null; diagnosticsBusy: boolean }>(); defineEmits<{ 'refresh-diagnostics': [] }>(); const ssExits = computed(() => bundle.value.config.exits.filter(e => e.type === 'shadowsocks-rust'))
+const bundle = defineModel<Bundle>('bundle', { required: true }); const props = defineProps<{ diagnostics: Diagnostics | null; diagnosticsBusy: boolean }>(); const emit = defineEmits<{ 'refresh-diagnostics': []; 'pending-change': [value: boolean] }>(); const ssExits = computed(() => bundle.value.config.exits.filter(e => e.type === 'shadowsocks-rust'))
 const visiblePasswords = ref(new Set<Exit>())
+const pendingExit = ref<Exit | null>(null)
+const exitDraftForm = ref<HTMLFormElement | null>(null)
+const exitDraftName = ref<HTMLInputElement | null>(null)
 const checkedAt = computed(() => props.diagnostics ? `检测于 ${new Date(props.diagnostics.checked_at).toLocaleString()}` : '尚未检测')
+const pending = computed(() => pendingExit.value !== null)
 function passwordVisible(exit: Exit) { return visiblePasswords.value.has(exit) }
 function togglePassword(exit: Exit) { const next = new Set(visiblePasswords.value); if (next.has(exit)) next.delete(exit); else next.add(exit); visiblePasswords.value = next }
 function keyHint(method: string) {
@@ -41,5 +56,15 @@ function keyHint(method: string) {
   if (method === '2022-blake3-chacha20-poly1305') return '仅支持单段 Base64 编码的 32 字节密钥（通常 44 个字符）；生成：openssl rand -base64 32'
   return ''
 }
-function add() { let port = 1080; const used = new Set(bundle.value.config.exits.map(e => e.listen_port)); while (used.has(port)) port++; bundle.value.config.exits.push({ name: `ss${ssExits.value.length + 1}`, type: 'shadowsocks-rust', fwmark: 0, server: '', server_port: 8388, method: '2022-blake3-aes-128-gcm', password: '', username: 'default', listen_address: '127.0.0.1', listen_port: port, tcp: true, udp: true, timeout_seconds: 300 }) }
+function add() {
+  if (!pendingExit.value) {
+    let port = 1080; const used = new Set(bundle.value.config.exits.map(e => e.listen_port)); while (used.has(port)) port++
+    pendingExit.value = { name: `ss${ssExits.value.length + 1}`, type: 'shadowsocks-rust', fwmark: 0, server: '', server_port: 8388, method: '2022-blake3-aes-128-gcm', password: '', username: 'default', listen_address: '127.0.0.1', listen_port: port, tcp: true, udp: true, timeout_seconds: 300 }
+  }
+  void nextTick(() => { exitDraftForm.value?.scrollIntoView({ behavior: 'smooth', block: 'center' }); exitDraftName.value?.focus() })
+}
+function confirmExitDraft() { if (!pendingExit.value) return; const exit = pendingExit.value; bundle.value.config.exits.push(exit); visiblePasswords.value.delete(exit); pendingExit.value = null }
+function cancelExitDraft() { if (pendingExit.value) visiblePasswords.value.delete(pendingExit.value); pendingExit.value = null }
+watch(pending, value => emit('pending-change', value), { immediate: true })
+onBeforeUnmount(() => emit('pending-change', false))
 </script>

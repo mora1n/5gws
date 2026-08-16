@@ -93,6 +93,9 @@ func (s *Supervisor) Preflight(ctx context.Context, bundle store.Bundle) error {
 }
 
 func (s *Supervisor) prepareAt(ctx context.Context, root string, bundle store.Bundle) error {
+	if err := requireRuntimeCommands(bundle); err != nil {
+		return err
+	}
 	norm := bundle.Normalized()
 	files, err := render.GenerateAt(bundle.Config, norm, root)
 	if err != nil {
@@ -113,6 +116,19 @@ func (s *Supervisor) prepareAt(ctx context.Context, root string, bundle store.Bu
 		if err := runCheck(ctx, s.logs, check[0], check[1:]...); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func requireRuntimeCommands(bundle store.Bundle) error {
+	for _, exit := range bundle.Config.Exits {
+		if exit.Type != "shadowsocks-rust" {
+			continue
+		}
+		if _, err := exec.LookPath("sslocal"); err != nil {
+			return fmt.Errorf("required runtime command %q is missing from PATH: %w; install it with: 5gws install-ssrust --yes", "sslocal", err)
+		}
+		break
 	}
 	return nil
 }

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/morain/5gws/internal/config"
 )
 
 func TestInstallSmartDNSSkipsCurrentVersion(t *testing.T) {
@@ -18,6 +20,24 @@ func TestInstallSmartDNSSkipsCurrentVersion(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "version v0.13.1 already installed") {
 		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestEnsureRuntimeDryRunIncludesSSRustWithoutConfiguredExit(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"haproxy", "nft", "smartdns"} {
+		writeExecutable(t, filepath.Join(dir, name), "#!/bin/sh\n")
+	}
+	t.Setenv("PATH", dir)
+
+	var out bytes.Buffer
+	if err := EnsureRuntime(config.Config{DNS: config.DNSConfig{Binary: "smartdns"}}, true, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"shadowsocks-rust/releases/download/v1.24.0/", "dry-run: would install sslocal"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output %q does not contain %q", out.String(), want)
+		}
 	}
 }
 

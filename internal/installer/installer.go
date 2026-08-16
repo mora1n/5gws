@@ -33,10 +33,7 @@ func EnsureRuntime(cfg config.Config, dryRun bool, out io.Writer) error {
 	if err := ensureSmartDNS(cfg, dryRun, out); err != nil {
 		return err
 	}
-	if hasSSRustExit(cfg) {
-		return ensureSSRust(dryRun, out)
-	}
-	return nil
+	return ensureSSRust(dryRun, out)
 }
 
 func ensureSystemPackages(dryRun bool, out io.Writer) error {
@@ -149,15 +146,6 @@ func ensureSSRust(dryRun bool, out io.Writer) error {
 	}
 	fmt.Fprintln(out, "shadowsocks-rust: missing (sslocal)")
 	return InstallSSRust(Options{DryRun: dryRun, Yes: true}, out)
-}
-
-func hasSSRustExit(cfg config.Config) bool {
-	for _, exit := range cfg.Exits {
-		if exit.Type == "shadowsocks-rust" {
-			return true
-		}
-	}
-	return false
 }
 
 func installArchive(spec installSpec, opts Options, out io.Writer) error {
