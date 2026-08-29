@@ -128,6 +128,14 @@ sudo 5gws update
 卸载：
 
 ```sh
+sudo 5gws uninstall --yes
+```
+
+普通卸载会停止并移除 `5gws.service`，但保留数据库、出口、规则、管理员账号和其他配置。之后再次运行 `5gws install` 并输入相同的安装参数时，会自动复用这份配置，不会重置管理员密码。
+
+如果要执行全新安装并删除所有 5gws 状态（包括数据库、生成状态、配置和证书），请显式使用：
+
+```sh
 sudo 5gws uninstall --purge --yes
 ```
 

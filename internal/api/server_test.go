@@ -188,6 +188,50 @@ func TestWebConfigValidateAndNoChangeApplyDoNotCreateRevisions(t *testing.T) {
 	}
 }
 
+func TestConfigRefreshReturnsImportedDraftWithCustomExit(t *testing.T) {
+	server, closeState := testServer(t)
+	defer closeState()
+	active, err := server.Service.Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle := active.Bundle
+	bundle.Config.Exits = append(bundle.Config.Exits, config.ExitConfig{
+		Name: "uzu.bo", Type: "shadowsocks-rust", Server: "203.0.113.20", ServerPort: 27080,
+		Method: "aes-128-gcm", Password: "change-me", ListenAddress: "127.0.0.1", ListenPort: 1080,
+	})
+	bundle.Config.Routing.FallbackExit = "uzu.bo"
+	data, err := toml.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importRequest := httptest.NewRequest(http.MethodPost, "/api/v1/backup", bytes.NewReader(data))
+	importRequest.Header.Set("Content-Type", "application/toml")
+	response := serve(server.Router(true), importRequest)
+	if response.Code != http.StatusOK {
+		t.Fatalf("import=%d %s", response.Code, response.Body.String())
+	}
+	configResponse := serve(server.Router(true), request(t, http.MethodGet, "/api/v1/config", nil))
+	if configResponse.Code != http.StatusOK {
+		t.Fatalf("config=%d %s", configResponse.Code, configResponse.Body.String())
+	}
+	var refreshed store.Bundle
+	if err := json.Unmarshal(configResponse.Body.Bytes(), &refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if len(refreshed.Config.Exits) != 2 || refreshed.Config.Exits[1].Name != "uzu.bo" ||
+		refreshed.Config.Exits[1].Server != "203.0.113.20" || refreshed.Config.Routing.FallbackExit != "uzu.bo" {
+		t.Fatalf("refreshed draft lost custom exit: %+v", refreshed.Config)
+	}
+	current, err := server.Service.Active(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(current.Bundle.Config.Exits) != 1 || current.Bundle.Config.Routing.FallbackExit != "direct" {
+		t.Fatalf("active changed during import: %+v", current.Bundle.Config)
+	}
+}
+
 func TestCurrentConfigSupplementsMissingManagedRulesWithoutMutatingActive(t *testing.T) {
 	server, closeState := testServer(t)
 	defer closeState()

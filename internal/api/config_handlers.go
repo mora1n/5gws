@@ -46,14 +46,14 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) currentConfig(w http.ResponseWriter, r *http.Request) {
-	active, err := s.Service.Active(r.Context())
+	draft, err := s.Service.Draft(r.Context())
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	active.Bundle.ResolvedRules = nil
-	active.Bundle.Rules = rules.EnsureManaged(active.Bundle.Rules)
-	writeJSON(w, http.StatusOK, active.Bundle)
+	draft.Bundle.ResolvedRules = nil
+	draft.Bundle.Rules = rules.EnsureManaged(draft.Bundle.Rules)
+	writeJSON(w, http.StatusOK, draft.Bundle)
 }
 
 func (s *Server) defaultRules(w http.ResponseWriter, _ *http.Request) {

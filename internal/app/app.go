@@ -71,7 +71,7 @@ func usage(out io.Writer) {
 Setup:
   install             initialize SQLite and 5gws.service
   reset-admin         create or reset the admin login and print a new password
-  uninstall           remove the service and optionally all state
+  uninstall           remove the service; state is kept unless --purge is used
   install-smartdns    install the pinned smartdns-rs runtime
   install-ssrust      install the pinned shadowsocks-rust runtime
 
@@ -82,7 +82,7 @@ Daemon operations (root, via /run/5gws/control.sock):
   compact             compact SQLite after stopping 5gws.service
   apply               validate and apply the pending CLI configuration
   export FILE         export the active configuration as TOML
-  import FILE         import TOML as pending CLI configuration
+  import FILE         import TOML as pending CLI configuration (run apply to activate)
   update              install the latest verified release
   ios-link            show the generated iOS profile links
 `)

@@ -2,10 +2,13 @@ package app
 
 import (
 	"bytes"
-	"os"
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/morain/5gws/internal/config"
+	"github.com/morain/5gws/internal/store"
 )
 
 func TestHelpAndUnknownCommand(t *testing.T) {
@@ -17,6 +20,9 @@ func TestHelpAndUnknownCommand(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("help missing %q", want)
 		}
+	}
+	if !strings.Contains(out.String(), "state is kept unless --purge is used") || !strings.Contains(out.String(), "run apply to activate") {
+		t.Fatalf("help does not explain uninstall/import lifecycle:\n%s", out.String())
 	}
 	if strings.Contains(out.String(), "rollback") {
 		t.Fatal("help still exposes removed revision rollback")
@@ -37,13 +43,38 @@ func TestPrintAdminCredentialsShowsUsernameAndPassword(t *testing.T) {
 	}
 }
 
-func TestRefuseLegacyInstallWithExistingDatabase(t *testing.T) {
+func TestLoadExistingBundlePreservesCustomExit(t *testing.T) {
 	stateDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(stateDir, "5gws.db"), []byte("existing"), 0o600); err != nil {
+	state, err := store.Open(filepath.Join(stateDir, "5gws.db"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := refuseLegacyInstall(stateDir); err == nil || !strings.Contains(err.Error(), "fresh installation only") {
-		t.Fatalf("expected explicit fresh-install rejection, got %v", err)
+	cfg := installConfig("10.0.0.1", "172.22.0.0/16", "eth0", "dot.example.com", "", false)
+	cfg.Exits = append(cfg.Exits, config.ExitConfig{
+		Name: "uzu.bo", Type: "shadowsocks-rust", Server: "203.0.113.20", ServerPort: 27080,
+		Method: "aes-128-gcm", Password: "change-me", ListenAddress: "127.0.0.1", ListenPort: 1080,
+	})
+	if _, err := state.Initialize(context.Background(), store.Bundle{Config: cfg}); err != nil {
+		state.Close()
+		t.Fatal(err)
+	}
+	if err := state.Close(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadExistingBundle(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded == nil || len(loaded.Config.Exits) != 2 || loaded.Config.Exits[1].Name != "uzu.bo" {
+		t.Fatalf("loaded bundle lost custom exit: %+v", loaded)
+	}
+}
+
+func TestValidateInstallIdentityRejectsChangedInput(t *testing.T) {
+	existing := installConfig("10.0.0.1", "172.22.0.0/16", "eth0", "dot.example.com", "", false)
+	requested := installConfig("10.0.0.2", "172.22.0.0/16", "eth0", "dot.example.com", "", false)
+	if err := validateInstallIdentity(requested, existing); err == nil || !strings.Contains(err.Error(), "gateway IP") {
+		t.Fatalf("expected gateway mismatch, got %v", err)
 	}
 }
 

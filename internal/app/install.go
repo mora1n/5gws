@@ -43,21 +43,45 @@ func runInstall(args []string, input io.Reader, out io.Writer) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
+	var existing *store.Bundle
 	if !opts.dryRun {
 		if os.Geteuid() != 0 {
 			return errors.New("安装必须以 root 运行")
 		}
-		if err := refuseLegacyInstall(cfg.System.StateDir); err != nil {
+		if err := refuseLegacyUnits(); err != nil {
+			return err
+		}
+		var err error
+		existing, err = loadExistingBundle(cfg.System.StateDir)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			if err := validateInstallIdentity(cfg, existing.Config); err != nil {
+				return err
+			}
+			cfg = existing.Config
+		}
+	}
+	var bundle store.Bundle
+	var norm rules.Normalized
+	if existing != nil {
+		bundle = *existing
+		norm = bundle.Normalized()
+		if len(norm.Rules) == 0 && len(bundle.Rules.Rules)+len(bundle.Rules.Imports) > 0 {
+			return errors.New("existing 5gws database has no resolved rules; refusing to resume")
+		}
+		fmt.Fprintln(out, "检测到已有 5gws 数据库，将保留现有出口、规则和管理员账号")
+	} else {
+		bundle = store.Bundle{Config: cfg, Rules: rules.EnsureOptionalDefaults(rules.ManagedFile())}
+		bundle.ApplyDefaults()
+		var err error
+		norm, err = (rules.Resolver{}).Normalize(context.Background(), bundle.Rules)
+		if err != nil {
 			return err
 		}
 	}
-	bundle := store.Bundle{Config: cfg, Rules: rules.EnsureOptionalDefaults(rules.ManagedFile())}
-	bundle.ApplyDefaults()
 	if err := rules.ValidateDNSPoolReferences(bundle.Rules, bundle.Config.DNS.PoolNames()); err != nil {
-		return err
-	}
-	norm, err := (rules.Resolver{}).Normalize(context.Background(), bundle.Rules)
-	if err != nil {
 		return err
 	}
 	printInstallSummary(out, cfg, len(norm.Rules))
@@ -73,6 +97,9 @@ func runInstall(args []string, input io.Reader, out io.Writer) error {
 	}
 	if err := ensureCertificate(cfg, out); err != nil {
 		return err
+	}
+	if existing != nil {
+		return resumeService(cfg, out)
 	}
 	return initializeService(bundle.Config, bundle.Rules, norm, out)
 }
@@ -157,15 +184,76 @@ func enabledText(enabled bool) string {
 	return "关闭"
 }
 
-func refuseLegacyInstall(stateDir string) error {
-	if _, err := os.Stat(filepath.Join(stateDir, "5gws.db")); err == nil {
-		return errors.New("existing 5gws database found; fresh installation only")
-	}
+func refuseLegacyUnits() error {
 	units, _ := filepath.Glob("/etc/systemd/system/5gws-*.service")
 	if len(units) > 0 {
 		return fmt.Errorf("legacy units found: %s", strings.Join(units, ", "))
 	}
 	return nil
+}
+
+func loadExistingBundle(stateDir string) (*store.Bundle, error) {
+	database := filepath.Join(stateDir, "5gws.db")
+	if _, err := os.Stat(database); errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("inspect existing 5gws database: %w", err)
+	}
+	state, err := store.Open(database)
+	if err != nil {
+		return nil, fmt.Errorf("open existing 5gws database: %w", err)
+	}
+	defer state.Close()
+	active, err := state.Active(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("existing 5gws database cannot be reused: %w", err)
+	}
+	return &active.Bundle, nil
+}
+
+func validateInstallIdentity(requested, existing config.Config) error {
+	if requested.System != existing.System {
+		return errors.New("existing 5gws installation paths differ; use uninstall --purge --yes for a fresh installation")
+	}
+	checks := []struct {
+		name, requested, existing string
+	}{
+		{"panel listen", requested.Panel.Listen, existing.Panel.Listen},
+		{"gateway IP", requested.Network.GatewayIP, existing.Network.GatewayIP},
+		{"internal CIDR", requested.Network.InternalCIDR, existing.Network.InternalCIDR},
+		{"ingress interface", requested.Network.IngressIface, existing.Network.IngressIface},
+		{"DoT domain", requested.DNS.DOTDomain, existing.DNS.DOTDomain},
+	}
+	for _, check := range checks {
+		if check.requested != check.existing {
+			return fmt.Errorf("existing 5gws %s differs (%q != %q); use uninstall --purge --yes for a fresh installation", check.name, check.existing, check.requested)
+		}
+	}
+	if requested.IOS.Enabled != existing.IOS.Enabled {
+		return fmt.Errorf("existing 5gws iOS setting differs (%t != %t); use uninstall --purge --yes for a fresh installation", existing.IOS.Enabled, requested.IOS.Enabled)
+	}
+	return nil
+}
+
+func resumeService(cfg config.Config, out io.Writer) error {
+	if err := writeServiceUnit(); err != nil {
+		return err
+	}
+	if err := command(out, "systemctl", "daemon-reload"); err != nil {
+		return err
+	}
+	if err := command(out, "systemctl", "enable", "--now", "5gws.service"); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "\n安装完成（已复用现有配置）")
+	fmt.Fprintln(out, "  服务状态: sudo 5gws status")
+	fmt.Fprintln(out, "  管理员账号和密码保持不变；如需重置请运行 sudo 5gws reset-admin")
+	fmt.Fprintf(out, "  Nginx upstream: http://%s\n", cfg.Panel.Listen)
+	return nil
+}
+
+func writeServiceUnit() error {
+	return os.WriteFile("/etc/systemd/system/5gws.service", []byte(systemdUnit), 0o644)
 }
 
 func initializeService(cfg config.Config, file rules.File, norm rules.Normalized, out io.Writer) error {
@@ -188,7 +276,7 @@ func initializeService(cfg config.Config, file rules.File, norm rules.Normalized
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile("/etc/systemd/system/5gws.service", []byte(systemdUnit), 0o644); err != nil {
+	if err := writeServiceUnit(); err != nil {
 		return err
 	}
 	if err := command(out, "systemctl", "daemon-reload"); err != nil {
@@ -365,6 +453,9 @@ func runUninstall(args []string, out io.Writer) error {
 	}
 	if err := command(out, "systemctl", "daemon-reload"); err != nil {
 		result = errors.Join(result, err)
+	}
+	if result == nil && !*purge {
+		fmt.Fprintln(out, "5gws 服务已卸载；数据库和配置已保留，再次运行 install 且参数一致时会自动复用")
 	}
 	return result
 }
