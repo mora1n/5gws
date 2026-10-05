@@ -152,7 +152,7 @@ func collectMetrics(ctx context.Context, application *service.Service, superviso
 				log.Printf("metrics active revision: %v", err)
 			}
 		} else {
-			metric := engine.CollectMetrics(supervisor.Status(), active.Bundle.Config.DNS.ListenUDP, active.Bundle.Config.Network.IngressIface)
+			metric := engine.CollectMetrics(ctx, supervisor.Status(), active.Bundle.Config)
 			if err := application.Store().PutMetric(ctx, metric.Timestamp, metric); err != nil && ctx.Err() == nil {
 				log.Printf("metrics: %v", err)
 			}

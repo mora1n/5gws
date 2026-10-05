@@ -152,6 +152,7 @@ func serveOneDOT(listener net.Listener) {
 	}
 	response := new(dns.Msg)
 	response.SetReply(message)
+	response.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: message.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET}, A: net.ParseIP("192.0.2.10")}}
 	_ = dnsConnection.WriteMsg(response)
 }
 

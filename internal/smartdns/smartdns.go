@@ -46,7 +46,7 @@ func GenerateAt(cfg config.Config, norm rules.Normalized, configDir string) (Out
 	fmt.Fprintf(&b, "bind-tcp %s\n", cfg.DNS.ListenTCP)
 	fmt.Fprintf(&b, "bind-tls %s\n", cfg.DNS.ListenDOT)
 	if cfg.DNS.ListenPublicDOT != "" {
-		fmt.Fprintf(&b, "bind-tls %s\n", cfg.DNS.ListenPublicDOT)
+		fmt.Fprintf(&b, "bind-tls %s -group overseas_public -no-rule-addr -no-rule-soa\n", cfg.DNS.ListenPublicDOT)
 	}
 	fmt.Fprintf(&b, "bind-cert-file %s\n", cfg.DNS.CertFile)
 	fmt.Fprintf(&b, "bind-cert-key-file %s\n", cfg.DNS.KeyFile)
@@ -56,7 +56,7 @@ func GenerateAt(cfg config.Config, norm rules.Normalized, configDir string) (Out
 	b.WriteString("prefetch-domain yes\n")
 	b.WriteString("response-mode fastest-response\n")
 	b.WriteString("force-AAAA-SOA yes\n")
-	b.WriteString("force-qtype-SOA 64 65\n")
+	b.WriteString("force-qtype-soa 64\nforce-qtype-soa 65\n")
 	for _, upstream := range cfg.DNS.UpstreamsCN {
 		fmt.Fprintf(&b, "server %s -group cn -exclude-default-group\n", upstream)
 	}

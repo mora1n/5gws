@@ -320,7 +320,10 @@ WantedBy=multi-user.target
 func ensureCertificate(cfg config.Config, out io.Writer) error {
 	if _, err := os.Stat(cfg.DNS.CertFile); err == nil {
 		if _, err := os.Stat(cfg.DNS.KeyFile); err == nil {
-			return allowSmartDNSCertificateRead(cfg)
+			if err := allowSmartDNSCertificateRead(cfg); err != nil {
+				return err
+			}
+			return ensureCertificateDeployHook(cfg, out)
 		}
 	}
 	if _, err := exec.LookPath("certbot"); err != nil {
@@ -344,7 +347,10 @@ func ensureCertificate(cfg config.Config, out io.Writer) error {
 	if err := copy(filepath.Join(live, "privkey.pem"), cfg.DNS.KeyFile, 0o600); err != nil {
 		return err
 	}
-	return allowSmartDNSCertificateRead(cfg)
+	if err := allowSmartDNSCertificateRead(cfg); err != nil {
+		return err
+	}
+	return ensureCertificateDeployHook(cfg, out)
 }
 
 func allowSmartDNSCertificateRead(cfg config.Config) error {
@@ -434,6 +440,9 @@ func runUninstall(args []string, out io.Writer) error {
 		return errors.New("uninstall must run as root")
 	}
 	var result error
+	if err := removeCertificateDeployHook("/var/lib/5gws"); err != nil {
+		result = errors.Join(result, err)
+	}
 	if err := command(out, "systemctl", "disable", "--now", "5gws.service"); err != nil {
 		result = errors.Join(result, err)
 	}

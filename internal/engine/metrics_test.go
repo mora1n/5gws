@@ -1,8 +1,13 @@
 package engine
 
 import (
+	"context"
+	"github.com/miekg/dns"
+	"net"
 	"strings"
 	"testing"
+
+	"github.com/morain/5gws/internal/config"
 )
 
 func TestNetworkBytesUsesConfiguredInterface(t *testing.T) {
@@ -19,9 +24,40 @@ func TestNetworkBytesUsesConfiguredInterface(t *testing.T) {
 }
 
 func TestCollectMetricsMarksDNSFailure(t *testing.T) {
-	metric := CollectMetrics(nil, "invalid-address", "missing0")
+	metric := CollectMetrics(context.Background(), nil, config.Config{DNS: config.DNSConfig{ListenUDP: "invalid-address"}, Network: config.NetworkConfig{IngressIface: "missing0"}})
 	if metric.DNSOK || metric.DNSLatencyMS != 0 {
 		t.Fatalf("DNS result = ok:%v latency:%v", metric.DNSOK, metric.DNSLatencyMS)
+	}
+	if metric.DNSError == "" || metric.DOTOK || metric.DOTError == "" {
+		t.Fatalf("missing explicit failures: %+v", metric)
+	}
+}
+
+func TestUDPHealthProbeRejectsSERVFAILAndEmptyAnswers(t *testing.T) {
+	for _, mode := range []string{"ok", "servfail", "empty"} {
+		t.Run(mode, func(t *testing.T) {
+			packet, err := net.ListenPacket("udp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := &dns.Server{PacketConn: packet, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, request *dns.Msg) {
+				response := new(dns.Msg)
+				response.SetReply(request)
+				if mode == "servfail" {
+					response.Rcode = dns.RcodeServerFailure
+				}
+				if mode == "ok" {
+					response.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET}, A: net.ParseIP("192.0.2.10")}}
+				}
+				_ = w.WriteMsg(response)
+			})}
+			go func() { _ = server.ActivateAndServe() }()
+			t.Cleanup(func() { server.Shutdown() })
+			err = probeDNS(context.Background(), packet.LocalAddr().String())
+			if (err == nil) != (mode == "ok") {
+				t.Fatalf("mode %s, error %v", mode, err)
+			}
+		})
 	}
 }
 

@@ -269,7 +269,6 @@ func (c *Config) ApplyDefaults() {
 	}
 	if len(c.DNS.UpstreamsOverseasPublic) == 0 {
 		c.DNS.UpstreamsOverseasPublic = []string{
-			"22.22.22.22",
 			"1.1.1.1",
 			"8.8.8.8",
 			"9.9.9.9",

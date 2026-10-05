@@ -180,7 +180,6 @@ func TestApplyDefaultsSelectsSmartDNS(t *testing.T) {
 	})
 	assertEqualStrings(t, cfg.DNS.UpstreamsOverseasPrivate, []string{"22.22.22.22"})
 	assertEqualStrings(t, cfg.DNS.UpstreamsOverseasPublic, []string{
-		"22.22.22.22",
 		"1.1.1.1",
 		"8.8.8.8",
 		"9.9.9.9",

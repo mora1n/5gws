@@ -2,7 +2,7 @@ package engine
 
 import (
 	"bufio"
-	"encoding/binary"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -10,6 +10,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/miekg/dns"
+	"github.com/morain/5gws/internal/config"
+	"github.com/morain/5gws/internal/diagnostics"
 )
 
 type Metrics struct {
@@ -23,9 +27,14 @@ type Metrics struct {
 	Interface      string  `json:"interface"`
 	DNSOK          bool    `json:"dns_ok"`
 	DNSLatencyMS   float64 `json:"dns_latency_ms"`
+	DNSError       string  `json:"dns_error,omitempty"`
+	DOTOK          bool    `json:"dot_ok"`
+	DOTLatencyMS   float64 `json:"dot_latency_ms"`
+	DOTError       string  `json:"dot_error,omitempty"`
 }
 
-func CollectMetrics(processes []ProcessStatus, dnsAddress, interfaceName string) Metrics {
+func CollectMetrics(ctx context.Context, processes []ProcessStatus, cfg config.Config) Metrics {
+	interfaceName := cfg.Network.IngressIface
 	metric := Metrics{Timestamp: time.Now().Unix(), ProcessCount: len(processes), Interface: interfaceName}
 	pageSize := uint64(os.Getpagesize())
 	for _, process := range processes {
@@ -49,11 +58,34 @@ func CollectMetrics(processes []ProcessStatus, dnsAddress, interfaceName string)
 	metric.TCPConnections = countProcLines("/proc/net/tcp") + countProcLines("/proc/net/tcp6")
 	metric.RXBytes, metric.TXBytes = networkBytes(interfaceName)
 	started := time.Now()
-	if probeDNS(dnsAddress) == nil {
+	if err := probeDNS(ctx, cfg.DNS.ListenUDP); err == nil {
 		metric.DNSOK = true
 		metric.DNSLatencyMS = float64(time.Since(started).Microseconds()) / 1000
+	} else {
+		metric.DNSError = err.Error()
 	}
+	collectDOTMetrics(ctx, cfg, &metric)
 	return metric
+}
+
+func collectDOTMetrics(ctx context.Context, cfg config.Config, metric *Metrics) {
+	result := (diagnostics.Runner{}).Run(ctx, cfg, diagnostics.ScopeDOT)
+	metric.DOTOK = true
+	var failures []string
+	for _, item := range []struct {
+		label  string
+		result *diagnostics.DOTResult
+	}{{"public DoT", result.DOT}, {"internal DoT", result.InternalDOT}} {
+		if item.result.Status == "disabled" {
+			metric.DOTOK = false
+			failures = append(failures, item.label+": disabled")
+		} else if item.result.Status != "ok" {
+			metric.DOTOK = false
+			failures = append(failures, item.label+": "+item.result.Error)
+		}
+		metric.DOTLatencyMS = max(metric.DOTLatencyMS, item.result.LatencyMS)
+	}
+	metric.DOTError = strings.Join(failures, "; ")
 }
 
 func swapBytesFrom(reader io.Reader) (uint64, error) {
@@ -127,7 +159,7 @@ func networkBytesFrom(reader io.Reader, interfaceName string) (uint64, uint64) {
 	return rx, tx
 }
 
-func probeDNS(address string) error {
+func probeDNS(ctx context.Context, address string) error {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return err
@@ -135,27 +167,11 @@ func probeDNS(address string) error {
 	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
 		host = "127.0.0.1"
 	}
-	conn, err := net.DialTimeout("udp", net.JoinHostPort(host, port), time.Second)
+	message := new(dns.Msg)
+	message.SetQuestion("example.com.", dns.TypeA)
+	response, _, err := (&dns.Client{Net: "udp", Timeout: time.Second}).ExchangeContext(ctx, message, net.JoinHostPort(host, port))
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(time.Second))
-	packet := make([]byte, 12, 29)
-	binary.BigEndian.PutUint16(packet[0:2], 0x5a5a)
-	binary.BigEndian.PutUint16(packet[2:4], 0x0100)
-	binary.BigEndian.PutUint16(packet[4:6], 1)
-	packet = append(packet, 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1)
-	if _, err := conn.Write(packet); err != nil {
-		return err
-	}
-	buf := make([]byte, 512)
-	n, err := conn.Read(buf)
-	if err != nil {
-		return err
-	}
-	if n < 12 || binary.BigEndian.Uint16(buf[:2]) != 0x5a5a {
-		return fmt.Errorf("invalid DNS response")
-	}
-	return nil
+	return diagnostics.ValidateDNSResponse(message, response)
 }

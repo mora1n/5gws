@@ -16,10 +16,11 @@ const (
 )
 
 type Result struct {
-	CheckedAt time.Time    `json:"checked_at"`
-	DNS       []DNSResult  `json:"dns,omitempty"`
-	Exits     []ExitResult `json:"exits,omitempty"`
-	DOT       *DOTResult   `json:"dot,omitempty"`
+	CheckedAt   time.Time    `json:"checked_at"`
+	DNS         []DNSResult  `json:"dns,omitempty"`
+	Exits       []ExitResult `json:"exits,omitempty"`
+	DOT         *DOTResult   `json:"dot,omitempty"`
+	InternalDOT *DOTResult   `json:"internal_dot,omitempty"`
 }
 
 type DNSResult struct {
@@ -80,7 +81,7 @@ func (r Runner) Run(ctx context.Context, cfg config.Config, scope string) Result
 		dot   DOTResult
 	}
 	count := 0
-	parts := make(chan part, 3)
+	parts := make(chan part, 4)
 	if scope == ScopeAll || scope == ScopeDNS {
 		count++
 		go func() { parts <- part{kind: ScopeDNS, dns: probeDNSPools(ctx, cfg)} }()
@@ -90,8 +91,11 @@ func (r Runner) Run(ctx context.Context, cfg config.Config, scope string) Result
 		go func() { parts <- part{kind: ScopeExits, exits: r.probeExits(ctx, cfg)} }()
 	}
 	if scope == ScopeAll || scope == ScopeDOT {
-		count++
+		count += 2
 		go func() { parts <- part{kind: ScopeDOT, dot: probeDOT(ctx, cfg, r.RootCAs)} }()
+		go func() {
+			parts <- part{kind: "internal_dot", dot: probeDOTListener(ctx, dotProbe{DNS: cfg.DNS, Listen: cfg.DNS.ListenDOT, Roots: r.RootCAs})}
+		}()
 	}
 	for range count {
 		item := <-parts
@@ -102,6 +106,8 @@ func (r Runner) Run(ctx context.Context, cfg config.Config, scope string) Result
 			result.Exits = item.exits
 		case ScopeDOT:
 			result.DOT = &item.dot
+		case "internal_dot":
+			result.InternalDOT = &item.dot
 		}
 	}
 	return result

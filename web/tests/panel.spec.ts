@@ -57,8 +57,8 @@ async function mockAPI(page: Page, applyHandler?: (route: Route) => Promise<unkn
     if (path === '/api/v1/me') return json({ username: 'admin' })
     if (path === '/api/v1/dashboard') return json({ version: '0.2.0', active_revision: 7, rules: 10023, processes: [{ name: 'smartdns', pid: 101 }, { name: 'haproxy', pid: 102 }, { name: 'sslocal', pid: 103 }, { name: 'gateway', pid: 100 }] })
     if (path === '/api/v1/metrics') return json({ metrics: [
-      { timestamp: 1720699200, process_count: 4, rss_bytes: 52428800, swap_bytes: 1048576, tcp_connections: 31, rx_bytes: 1000000, tx_bytes: 2000000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 3.2 },
-      { timestamp: 1720699210, process_count: 4, rss_bytes: 53428800, swap_bytes: 2097152, tcp_connections: 35, rx_bytes: 1100000, tx_bytes: 2200000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 4.1 },
+      { timestamp: 1720699200, process_count: 4, rss_bytes: 52428800, swap_bytes: 1048576, tcp_connections: 31, rx_bytes: 1000000, tx_bytes: 2000000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 3.2, dot_ok: true, dot_latency_ms: 11.2 },
+      { timestamp: 1720699210, process_count: 4, rss_bytes: 53428800, swap_bytes: 2097152, tcp_connections: 35, rx_bytes: 1100000, tx_bytes: 2200000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 4.1, dot_ok: true, dot_latency_ms: 12.1 },
     ] })
     if (path === '/api/v1/diagnostics/run') return json({ checked_at: '2026-07-12T12:00:00Z', dns: [
       { pool: 'cn', upstream: '223.5.5.5', protocol: 'udp', status: 'ok', latency_ms: 12.5, answers: ['1.2.3.4'] },
@@ -69,7 +69,7 @@ async function mockAPI(page: Page, applyHandler?: (route: Route) => Promise<unkn
     ], exits: [
       { name: 'direct', type: 'direct', status: 'ok', egress_status: 'ok', egress_ip: '203.0.113.10', egress_latency_ms: 35.2 },
       { name: 'tokyo-shadowsocks-production-long-name', type: 'shadowsocks-rust', status: 'ok', upstream: 'edge.gateway.example.net:8388', upstream_status: 'ok', upstream_latency_ms: 21.1, egress_status: 'ok', egress_ip: '198.51.100.20', egress_latency_ms: 88.4 },
-    ], dot: { domain: 'dns.gateway.example.net', listen: '0.0.0.0:853', status: 'ok', latency_ms: 11.2, certificate_status: 'ok', expires_at: '2026-09-10T00:00:00Z', days_remaining: 60, domain_match: true } })
+    ], internal_dot: { domain: 'dns.gateway.example.net', listen: '0.0.0.0:1853', status: 'ok', latency_ms: 8.2, certificate_status: 'ok', days_remaining: 60, domain_match: true }, dot: { domain: 'dns.gateway.example.net', listen: '0.0.0.0:853', status: 'ok', latency_ms: 11.2, certificate_status: 'ok', expires_at: '2026-09-10T00:00:00Z', days_remaining: 60, domain_match: true } })
     if (path === '/api/v1/config') return json(bundle)
 		if (path === '/api/v1/rules/defaults') return json(managedRules)
 		if (path === '/api/v1/config/validate') return json({ rule_count: 10023, warnings: [] })
@@ -253,7 +253,8 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
     await mockAPI(page)
     await page.goto('/')
     await expect(page.getByRole('heading', { name: '运行概览' })).toBeVisible()
-		await expect(page.getByText('DNS 服务延迟', { exact: true })).toBeVisible()
+		await expect(page.getByText('UDP DNS 延迟', { exact: true })).toBeVisible()
+		await expect(page.getByText('DoT 延迟', { exact: true })).toBeVisible()
 		await expect(page.getByText('托管 Swap', { exact: true })).toBeVisible()
 		await expect(page.getByRole('heading', { name: '运行健康' })).toBeVisible()
 		await expect(page.getByRole('button', { name: '保存' })).toBeHidden()
@@ -279,6 +280,8 @@ for (const viewport of [{ name: 'desktop', width: 1440, height: 900 }, { name: '
 				await expect(page.getByLabel('公网 DoT 监听')).toBeHidden()
 				await expect(page.getByLabel('公网海外上游')).toBeVisible()
 				await expect(page.getByRole('heading', { name: '已应用 DNS 状态' })).toBeVisible()
+				await expect(page.getByText('网关 DoT', { exact: true })).toBeVisible()
+				await expect(page.getByText('公网 DoT', { exact: true })).toBeVisible()
 				if (viewport.name === 'mobile') await page.getByRole('heading', { name: '已应用 DNS 状态' }).scrollIntoViewIfNeeded()
 				await page.screenshot({ path: `/tmp/5gws-panel-${viewport.name}-dns.png`, fullPage: true })
 			}
@@ -429,4 +432,18 @@ test('manual rule apply reconnects with the same operation ID', async ({ page })
 	expect(applyBody?.rules.rules).toContainEqual(expect.objectContaining({ name: 'manual-smoke', domain_suffix: ['manual-smoke.invalid'] }))
 	for (const name of ['ip-check', 'openai-and-related-services', 'manual-smoke']) expect(applyBody?.rules.rules).toContainEqual(expect.objectContaining({ name }))
 	for (const name of ['speedtest', 'cn', 'gfw', 'category-speedtest-global']) expect(applyBody?.rules.imports).toContainEqual(expect.objectContaining({ name }))
+})
+
+test('overview exposes DoT failure when UDP DNS is healthy', async ({ page }) => {
+  await mockAPI(page)
+  await page.route('**/api/v1/metrics', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ metrics: [{ timestamp: 1720699210, process_count: 4, rss_bytes: 53428800, swap_bytes: 0, tcp_connections: 35, rx_bytes: 1100000, tx_bytes: 2200000, interface: 'wwan0', dns_ok: true, dns_latency_ms: 4.1, dot_ok: false, dot_latency_ms: 0, dot_error: 'public DoT: read timeout' }] }),
+  }))
+  await page.goto('/')
+  await expect(page.getByText('UDP DNS 延迟', { exact: true })).toBeVisible()
+  await expect(page.getByText('4.1 ms', { exact: true })).toBeVisible()
+  await expect(page.getByText('DoT 延迟', { exact: true })).toBeVisible()
+  await expect(page.getByText('public DoT: read timeout', { exact: true })).toBeVisible()
 })

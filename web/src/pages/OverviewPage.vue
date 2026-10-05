@@ -7,9 +7,10 @@
   </div>
   <section class="panel-section">
     <div class="mb-3 flex items-center justify-between"><div><h3 class="font-semibold">最近一小时</h3><div class="mt-1 text-xs text-base-content/55">{{ metricTime }}</div></div><button class="btn btn-ghost btn-square btn-sm" title="刷新运行数据" :disabled="runtimeBusy" @click="$emit('refresh-runtime')"><RefreshCw class="size-4" :class="{ 'animate-spin': runtimeBusy }" /></button></div>
-    <div class="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-5">
+    <div class="grid grid-cols-2 gap-2 sm:gap-3 xl:grid-cols-6">
       <div v-for="trend in trends" :key="trend.label" class="border border-base-300 bg-base-100 p-3">
         <div class="flex items-baseline justify-between gap-2"><span class="text-sm text-base-content/60">{{ trend.label }}</span><span class="font-medium">{{ trend.value }}</span></div>
+        <div v-if="'error' in trend && trend.error" class="mt-2 break-words text-xs text-error">{{ trend.error }}</div>
         <SparklineChart class="mt-3 text-primary" :values="trend.values" :label="`${trend.label}趋势`" />
       </div>
     </div>
@@ -44,7 +45,8 @@ const rates = computed(() => props.metrics.slice(1).map((metric, index) => {
   return bytes / seconds
 }))
 const trends = computed(() => [
-  { label: 'DNS 服务延迟', value: latest.value?.dns_ok ? `${latest.value.dns_latency_ms.toFixed(1)} ms` : '失败', values: props.metrics.filter(item => item.dns_ok).map(item => item.dns_latency_ms) },
+  { label: 'UDP DNS 延迟', value: latest.value?.dns_ok ? `${latest.value.dns_latency_ms.toFixed(1)} ms` : '失败', values: props.metrics.filter(item => item.dns_ok).map(item => item.dns_latency_ms), error: latest.value?.dns_error },
+  { label: 'DoT 延迟', value: latest.value?.dot_ok == null ? '尚未检测' : latest.value.dot_ok ? `${latest.value.dot_latency_ms?.toFixed(1)} ms` : '失败', values: props.metrics.filter(item => item.dot_ok).map(item => item.dot_latency_ms!), error: latest.value?.dot_error },
   { label: '托管内存', value: formatBytes(latest.value?.rss_bytes), values: props.metrics.map(item => item.rss_bytes) },
   { label: '托管 Swap', value: formatBytes(latest.value?.swap_bytes), values: props.metrics.map(item => item.swap_bytes) },
   { label: '主机 TCP', value: String(latest.value?.tcp_connections ?? '-'), values: props.metrics.map(item => item.tcp_connections) },
@@ -62,8 +64,9 @@ const health = computed(() => {
     const failed = items.filter(item => item.status !== 'ok')
     return { label: `DNS · ${poolLabel(pool)}`, status: items.length && !failed.length ? 'ok' : 'error', detail: items.length ? `${items.length - failed.length}/${items.length} 个上游可用` : '无检测结果' }
   })
-  const dot = props.diagnostics.dot
-  rows.unshift({ label: 'DoT', status: dot?.status || 'unknown', detail: dot?.status === 'ok' ? `${dot.latency_ms?.toFixed(1)} ms · 证书剩余 ${dot.days_remaining} 天` : dot?.error || '无检测结果' })
+  for (const [label, dot] of [['公网 DoT', props.diagnostics.dot], ['网关 DoT', props.diagnostics.internal_dot]] as const) {
+    rows.unshift({ label, status: dot?.status === 'ok' && dot.certificate_status === 'warning' ? 'warning' : dot?.status || 'unknown', detail: dot?.status === 'ok' ? `${dot.latency_ms?.toFixed(1)} ms · 证书剩余 ${dot.days_remaining} 天` : dot?.error || '无检测结果' })
+  }
   const failedExits = exits.filter(item => item.status !== 'ok')
   rows.push({ label: '出口', status: exits.length && !failedExits.length ? 'ok' : 'error', detail: exits.length ? `${exits.length - failedExits.length}/${exits.length} 个出口可用` : '无检测结果' })
   return rows

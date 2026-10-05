@@ -16,13 +16,23 @@ import (
 )
 
 func probeDOT(ctx context.Context, cfg config.Config, roots *x509.CertPool) DOTResult {
-	result := DOTResult{Domain: cfg.DNS.DOTDomain, Listen: cfg.DNS.ListenPublicDOT, Status: "error", CertificateStatus: "error"}
-	if cfg.DNS.ListenPublicDOT == "" {
+	return probeDOTListener(ctx, dotProbe{DNS: cfg.DNS, Listen: cfg.DNS.ListenPublicDOT, Roots: roots})
+}
+
+type dotProbe struct {
+	DNS    config.DNSConfig
+	Listen string
+	Roots  *x509.CertPool
+}
+
+func probeDOTListener(ctx context.Context, probe dotProbe) DOTResult {
+	result := DOTResult{Domain: probe.DNS.DOTDomain, Listen: probe.Listen, Status: "error", CertificateStatus: "error"}
+	if probe.Listen == "" {
 		result.Status = "disabled"
 		result.CertificateStatus = "disabled"
 		return result
 	}
-	certificate, err := readCertificate(cfg.DNS.CertFile)
+	certificate, err := readCertificate(probe.DNS.CertFile)
 	if err != nil {
 		result.Error = "certificate: " + err.Error()
 		return result
@@ -33,7 +43,7 @@ func probeDOT(ctx context.Context, cfg config.Config, roots *x509.CertPool) DOTR
 		result.Error = "certificate has expired"
 		return result
 	}
-	if err := certificate.VerifyHostname(cfg.DNS.DOTDomain); err != nil {
+	if err := certificate.VerifyHostname(probe.DNS.DOTDomain); err != nil {
 		result.Error = "certificate domain: " + err.Error()
 		return result
 	}
@@ -43,43 +53,52 @@ func probeDOT(ctx context.Context, cfg config.Config, roots *x509.CertPool) DOTR
 	} else {
 		result.CertificateStatus = "ok"
 	}
-	_, port, err := net.SplitHostPort(cfg.DNS.ListenPublicDOT)
+	result.LatencyMS, err = exchangeDOT(ctx, probe)
 	if err != nil {
-		result.Error = "DoT listen: " + err.Error()
+		result.Error = err.Error()
 		return result
+	}
+	result.Status = "ok"
+	return result
+}
+
+func exchangeDOT(ctx context.Context, probe dotProbe) (float64, error) {
+	_, port, err := net.SplitHostPort(probe.Listen)
+	if err != nil {
+		return 0, fmt.Errorf("DoT listen: %w", err)
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	dialer := &tls.Dialer{
 		NetDialer: &net.Dialer{Timeout: 3 * time.Second},
-		Config:    &tls.Config{ServerName: cfg.DNS.DOTDomain, MinVersion: tls.VersionTLS12, RootCAs: roots},
+		Config:    &tls.Config{ServerName: probe.DNS.DOTDomain, MinVersion: tls.VersionTLS12, RootCAs: probe.Roots},
 	}
 	started := time.Now()
 	connection, err := dialer.DialContext(probeCtx, "tcp", net.JoinHostPort("127.0.0.1", port))
 	if err != nil {
-		result.Error = "DoT TLS: " + err.Error()
-		return result
+		return elapsedMS(started), fmt.Errorf("DoT TLS: %w", err)
 	}
 	defer connection.Close()
+	deadline, _ := probeCtx.Deadline()
+	if err := connection.SetDeadline(deadline); err != nil {
+		return elapsedMS(started), fmt.Errorf("DoT deadline: %w", err)
+	}
+	stop := context.AfterFunc(probeCtx, func() { connection.Close() })
+	defer stop()
 	message := new(dns.Msg)
 	message.SetQuestion("example.com.", dns.TypeA)
 	dnsConnection := &dns.Conn{Conn: connection}
 	if err := dnsConnection.WriteMsg(message); err != nil {
-		result.Error = "DoT query: " + err.Error()
-		return result
+		return elapsedMS(started), fmt.Errorf("DoT query: %w", err)
 	}
 	response, err := dnsConnection.ReadMsg()
-	result.LatencyMS = elapsedMS(started)
 	if err != nil {
-		result.Error = "DoT response: " + err.Error()
-		return result
+		return elapsedMS(started), fmt.Errorf("DoT response: %w", err)
 	}
-	if response.Rcode != dns.RcodeSuccess {
-		result.Error = fmt.Sprintf("DoT response code: %s", dns.RcodeToString[response.Rcode])
-		return result
+	if err := ValidateDNSResponse(message, response); err != nil {
+		return elapsedMS(started), err
 	}
-	result.Status = "ok"
-	return result
+	return elapsedMS(started), nil
 }
 
 func readCertificate(path string) (*x509.Certificate, error) {

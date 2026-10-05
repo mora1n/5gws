@@ -8,7 +8,7 @@
     <label><span class="field-label">加密 DNS 策略</span><select v-model="bundle.config.network.encrypted_dns_policy" class="select w-full"><option value="reject">Reject</option><option value="allow">Allow</option></select></label>
     <label><span class="field-label">默认出口</span><select v-model="bundle.config.routing.fallback_exit" class="select w-full"><option v-for="exit in bundle.config.exits" :key="exit.name">{{ exit.name }}</option></select></label>
   </div></section>
-  <section class="panel-section"><h3 class="mb-4 font-semibold">DNS</h3><div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+  <section class="panel-section"><h3 class="mb-2 font-semibold">DNS</h3><p class="mb-4 text-sm text-base-content/60">指定客户端网段按规则使用网关分流；普通 Wi-Fi 通过公网 DoT 使用真实公网解析。</p><div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
     <label><span class="field-label">DoT 域名</span><input v-model.trim="bundle.config.dns.dot_domain" class="input w-full" /></label>
     <label><span class="field-label">DNS 缓存条目上限</span><input v-model.number="bundle.config.dns.cache_size" class="input w-full" type="number" min="1" step="1" /></label>
     <ListField v-model="bundle.config.dns.upstreams_cn" label="国内上游" />
@@ -40,16 +40,16 @@
       </div>
       <div v-if="!diagnostics?.dns?.length" class="p-6 text-center text-sm text-base-content/50">暂无检测结果</div>
     </div>
-    <div class="mt-4 border border-base-300 bg-base-100 p-3">
-      <div class="flex flex-wrap items-center gap-2"><span class="font-medium">DoT</span><span class="badge badge-sm" :class="dotStatusClass">{{ dotStatusText }}</span><span class="mono text-sm">{{ diagnostics?.dot?.domain || bundle.config.dns.dot_domain }}</span></div>
-      <div class="mt-2 text-sm text-base-content/65">{{ dotDetail }}</div>
+    <div v-for="item in dotResults" :key="item.label" class="mt-4 border border-base-300 bg-base-100 p-3">
+      <div class="flex flex-wrap items-center gap-2"><span class="font-medium">{{ item.label }}</span><span class="badge badge-sm" :class="dotStatusClass(item.result)">{{ dotStatusText(item.result) }}</span><span class="mono text-sm">{{ item.result?.domain || bundle.config.dns.dot_domain }}</span></div>
+      <div class="mt-2 text-sm text-base-content/65">{{ dotDetail(item.result) }}</div>
     </div>
   </section>
 </template>
 <script setup lang="ts">
 import { computed } from 'vue'
 import { Plus, RefreshCw, Trash2 } from '@lucide/vue'
-import type { Bundle, Diagnostics, DNSPool, Rule } from '@/types'
+import type { Bundle, Diagnostics, DNSPool, DOTDiagnostic, Rule } from '@/types'
 import ListField from '@/components/ListField.vue'
 const bundle = defineModel<Bundle>('bundle', { required: true })
 const props = defineProps<{ diagnostics: Diagnostics | null; diagnosticsBusy: boolean }>()
@@ -57,15 +57,15 @@ const emit = defineEmits<{ 'refresh-diagnostics': []; error: [value: string] }>(
 const originalNames = new WeakMap<DNSPool, string>()
 let poolSequence = 0
 const checkedAt = computed(() => props.diagnostics ? `检测于 ${new Date(props.diagnostics.checked_at).toLocaleString()}` : '尚未检测')
-const dotStatusClass = computed(() => props.diagnostics?.dot?.status === 'ok' ? (props.diagnostics.dot.certificate_status === 'warning' ? 'badge-warning' : 'badge-success') : 'badge-error')
-const dotStatusText = computed(() => props.diagnostics?.dot?.status === 'ok' ? (props.diagnostics.dot.certificate_status === 'warning' ? '证书即将到期' : '正常') : '异常')
-const dotDetail = computed(() => {
-  const dot = props.diagnostics?.dot
+const dotResults = computed(() => [{ label: '网关 DoT', result: props.diagnostics?.internal_dot }, { label: '公网 DoT', result: props.diagnostics?.dot }])
+function dotStatusClass(dot?: DOTDiagnostic) { return !dot ? 'badge-ghost' : dot.status === 'ok' ? (dot.certificate_status === 'warning' ? 'badge-warning' : 'badge-success') : 'badge-error' }
+function dotStatusText(dot?: DOTDiagnostic) { return !dot ? '待检测' : dot.status === 'ok' ? (dot.certificate_status === 'warning' ? '证书即将到期' : '正常') : dot.status === 'disabled' ? '未启用' : '异常' }
+function dotDetail(dot?: DOTDiagnostic) {
   if (!dot) return '暂无检测结果'
-  if (dot.status !== 'ok') return dot.error || 'DoT 检测失败'
+  if (dot.status !== 'ok') return dot.error || 'DoT 未启用或检测失败'
   const expires = dot.expires_at ? new Date(dot.expires_at).toLocaleDateString() : '-'
   return `${dot.latency_ms?.toFixed(1)} ms · 证书到期 ${expires} · 剩余 ${dot.days_remaining} 天 · 域名匹配`
-})
+}
 function poolName(pool: string) { return pool === 'cn' ? '国内' : pool === 'overseas_private' ? '内网海外' : pool === 'overseas_public' ? '公网海外' : pool }
 function addPool() {
   const existing = new Set(bundle.value.config.dns.custom_pools.map(pool => pool.name))

@@ -34,6 +34,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		return runDaemon(args[1:])
 	case "install":
 		return runInstall(args[1:], stdin, stdout)
+	case "deploy-certificate":
+		return runDeployCertificate(args[1:], stdout)
 	case "reset-admin":
 		return resetAdmin(args[1:], stdout)
 	case "uninstall":
@@ -45,7 +47,7 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	case "status":
 		return online(http.MethodGet, "/api/v1/dashboard", stdout)
 	case "doctor":
-		return online(http.MethodGet, "/api/v1/diagnostics", stdout)
+		return online(http.MethodPost, "/api/v1/diagnostics/run", stdout)
 	case "logs":
 		return logs(stdout)
 	case "compact":
@@ -74,6 +76,7 @@ Setup:
   uninstall           remove the service; state is kept unless --purge is used
   install-smartdns    install the pinned smartdns-rs runtime
   install-ssrust      install the pinned shadowsocks-rust runtime
+  deploy-certificate deploy a renewed DoT certificate; --install-hook installs its Certbot hook
 
 Daemon operations (root, via /run/5gws/control.sock):
   status              show active configuration and managed processes

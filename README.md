@@ -1,6 +1,6 @@
 # 5gws
 
-5gws 是面向固定客户端网段的 DNS 与域名分流网关。客户端配置系统 DNS 或 DNS over TLS 后，5gws 根据域名规则选择直连或 Shadowsocks 出口，并把需要经过网关的 TCP/QUIC 流量接入对应出口。
+5gws 是面向固定客户端网段的 DNS 与域名分流网关。指定客户端网段配置系统 DNS 或 DNS over TLS 后，5gws 根据域名规则选择直连或 Shadowsocks 出口，并把需要经过网关的 TCP/QUIC 流量接入对应出口。普通 Wi-Fi 的公网 DoT 使用真实公网解析，同一私人 DNS 域名可在两种网络间切换。
 
 ## 功能
 
@@ -112,6 +112,26 @@ Profile 和二维码由 Web 后端通过 `/ios/` 提供，HTTPS 仍由上面的 
 - 在“日志”中实时查看运行状态和错误，支持搜索、暂停跟随和下载。
 
 默认国内池包含阿里 DNS 等国内上游。首次安装或从未包含自定义 DNS 池的旧版本升级时，还会创建两组普通自定义池和本地规则：`cn_netease` / `netease-music` 避免网易云音乐命中不可用的竞速结果，`cn_unicom` / `china-unicom-app` 为中国联通 App 选择稳定的国内运营商 CDN。它们不是只读系统规则，可以在面板中编辑、重命名或删除。
+
+## DNS 入口与网络切换
+
+指定客户端网段的 DoT 流量由 nftables 转入网关入口，使用域名分流、网关 IPv4 重写和自定义 DNS 池，并抑制 AAAA、SVCB、HTTPS 记录。公网 DoT 使用 `overseas_public` 池，不执行地址重写或记录类型抑制，适用于普通 Wi-Fi。公网池应只配置可返回真实公网地址的上游；`22.22.22.22` 保留在内网海外池，不能用于普通 Wi-Fi。
+
+SmartDNS 0.13.0 与 0.13.1 的磁盘缓存格式不同。升级后若日志出现旧缓存加载错误，应先备份 `/var/log/smartdns/smartdns.cache`，将旧文件移出缓存路径，再重启服务重新生成；规则和数据库不受影响。
+
+运行概览分别显示 UDP DNS 和 DoT 指标；DoT 健康状态同时检查网关与公网入口。`5gws doctor` 会实际探测 DNS 上游、两个 DoT 入口、证书和出口，并展示错误。若网络切换后仍无法访问，请记录故障时间并对照这两项状态，手机切换行为需用真实设备验证。
+
+## 证书续期
+
+安装会创建仅处理当前 DoT 域名的 Certbot deploy hook。续期成功后，钩子验证证书域名、有效期和私钥，再更新 DoT 证书副本；安装了 Nginx 的服务器会验证配置并重新加载 Nginx，然后重启 `5gws.service`，数据面会短暂重连。无效证书不会覆盖现有副本，部署错误会明确返回给 Certbot。
+
+已有安装可补装钩子：
+
+```sh
+sudo 5gws deploy-certificate --install-hook
+```
+
+首次安装使用 Certbot standalone。已经用 Nginx 监听 80 的服务器应配置 ACME webroot，并通过 `certbot reconfigure --cert-name <DoT 域名> --webroot -w <webroot>` 修改续期方式，再执行 `certbot renew --cert-name <DoT 域名> --dry-run` 验证。普通卸载会移除 5gws 创建的部署钩子。
 
 ## 常用命令
 
